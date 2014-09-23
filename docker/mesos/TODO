@@ -1,0 +1,6 @@
+Work in progress to setup fig environment for testing Mesos + Pulsar
+
+Combine:
+http://stackoverflow.com/questions/25217208/setting-up-a-docker-fig-mesos-environment
+With:
+https://bitbucket.org/jmchilton/lwr/commits/555438d2fe266899338474b25c540fef42bcece7#chg-lwr/scripts/lwr_submit.py

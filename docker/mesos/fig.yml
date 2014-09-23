@@ -1,0 +1,23 @@
+zk:
+  image: mesos
+  command: /usr/share/zookeeper/bin/zkServer.sh start-foreground
+amqp:
+  image: mesos
+  command: /usr/sbin/rabbitmq-server
+  #image: tutum/rabbitmq
+pulsar:
+  image: mesos
+  # TODO: you know start and configure pulsar.
+  command: . /usr/share/pulsar/container_env.sh;
+master:
+  build: mesos-master
+  ports:
+    - "15050:5050"
+  links:
+    - "zk:zookeeper"
+    - "amqp:amqp"
+slave:
+  build: mesos-slave
+  links:
+    - "zk:zookeeper"
+    - "amqp:amqp"  # ?
