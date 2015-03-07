@@ -60,6 +60,8 @@ class BaseIntegrationTest(TempDirectoryTestCase):
         if kwds.get("local_setup", False):
             staging_directory = app.staging_directory
             options["jobs_directory"] = staging_directory
+        if environ.get("PULSAR_TEST_DISABLE_CLEANUP"):
+            options["cleanup"] = False
 
     def __setup_job_properties(self, app_conf, job_conf_props):
         if job_conf_props:

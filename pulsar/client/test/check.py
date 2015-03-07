@@ -196,7 +196,8 @@ def run(options):
             traceback.print_exc()
         raise
     finally:
-        shutil.rmtree(temp_directory)
+        if not getattr(options, 'cleanup', True):
+            shutil.rmtree(temp_directory)
 
 
 class Waiter(object):
