@@ -31,6 +31,7 @@ class PulsarApp(object):
     def __init__(self, **conf):
         if conf is None:
             conf = {}
+        self.__app_states = []
         self.__setup_staging_directory(conf.get("staging_directory", DEFAULT_STAGING_DIRECTORY))
         self.__setup_private_token(conf.get("private_token", DEFAULT_PRIVATE_TOKEN))
         self.__setup_persistence_directory(conf.get("persistence_directory", None))
@@ -51,17 +52,19 @@ class PulsarApp(object):
             except Exception:
                 pass
 
-        if self.__app_state:
-            self.__app_state.deactivate()
-            if self.ensure_cleanup:
-                self.__app_state.join(timeout)
+        for app_state in self.__app_states:
+            app_state.deactivate()
+
+        if self.ensure_cleanup:
+            for app_state in self.__app_states:
+                app_state.join(timeout)
 
     def __setup_bind_to_message_queue(self, conf):
         message_queue_url = conf.get("message_queue_url", None)
         app_state = None
         if message_queue_url:
             app_state = messaging.bind_app(self, message_queue_url, conf)
-        self.__app_state = app_state
+        self.__app_states.append(app_state)
 
     def __setup_tool_config(self, conf):
         """
