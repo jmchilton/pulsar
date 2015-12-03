@@ -51,17 +51,17 @@ class PulsarApp(object):
             except Exception:
                 pass
 
-        if self.__queue_state:
-            self.__queue_state.deactivate()
+        if self.__app_state:
+            self.__app_state.deactivate()
             if self.ensure_cleanup:
-                self.__queue_state.join(timeout)
+                self.__app_state.join(timeout)
 
     def __setup_bind_to_message_queue(self, conf):
         message_queue_url = conf.get("message_queue_url", None)
-        queue_state = None
+        app_state = None
         if message_queue_url:
-            queue_state = messaging.bind_app(self, message_queue_url, conf)
-        self.__queue_state = queue_state
+            app_state = messaging.bind_app(self, message_queue_url, conf)
+        self.__app_state = app_state
 
     def __setup_tool_config(self, conf):
         """
