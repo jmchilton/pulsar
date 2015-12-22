@@ -24,7 +24,7 @@ BUFFER_SIZE = 4096
 DEFAULT_ENCODING = os.environ.get('GALAXY_DEFAULT_ENCODING', 'utf-8')
 
 
-def is_in_directory(file, directory, local_path_module=os.path):
+def in_directory(file, directory, local_path_module=os.path):
     """
     Return true, if the common prefix of both is equal to directory
     e.g. /a/b/c/d.rst and directory is /a/b, the common prefix is /a/b
@@ -36,9 +36,6 @@ def is_in_directory(file, directory, local_path_module=os.path):
     directory = local_path_module.abspath(directory)
     file = local_path_module.abspath(file)
     return local_path_module.commonprefix([file, directory]) == directory
-
-
-in_directory = is_in_directory  # For compat. w/Galaxy.
 
 
 def umask_fix_perms(path, umask, unmasked_perms, gid=None):
