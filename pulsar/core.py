@@ -66,6 +66,13 @@ class PulsarApp(object):
             app_state = messaging.bind_app(self, message_queue_url, conf)
         self.__app_states.append(app_state)
 
+    def __setup_job_source_polling(self, conf):
+        job_source_urls = conf.get("job_source", [])
+        app_state = None
+        for job_source in job_source_urls:
+            app_state = messaging.bind_app(self, job_source_urls, conf)
+        self.__app_states.append(app_state)
+
     def __setup_tool_config(self, conf):
         """
         Setups toolbox object and authorization mechanism based
