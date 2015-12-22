@@ -25,13 +25,6 @@ BUFFER_SIZE = 4096
 DEFAULT_ENCODING = os.environ.get('GALAXY_DEFAULT_ENCODING', 'utf-8')
 
 
-def enum(**enums):
-    """
-    http://stackoverflow.com/questions/36932/how-can-i-represent-an-enum-in-python
-    """
-    return type('Enum', (), enums)
-
-
 def copy_to_path(object, path):
     """
     Copy file-like object to path.
