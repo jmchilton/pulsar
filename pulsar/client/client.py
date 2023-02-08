@@ -342,6 +342,7 @@ class BaseRemoteConfiguredJobClient(BaseJobClient):
             error_message = "Message-queue based Pulsar client requires destination define a remote job_directory to stage files into."
             raise Exception(error_message)
         self.client_manager = client_manager
+        self.amqp_key_prefix = self.destination_params.get("amqp_key_prefix")
 
     def _build_setup_message(self, command_line, dependencies_description, env, remote_staging, job_config, dynamic_file_sources):
         """
@@ -602,6 +603,8 @@ class CoexecutionLaunchMixin(BaseRemoteConfiguredJobClient):
             pulsar_app_config["manager"] = manager_config
         if "type" not in manager_config:
             manager_config["type"] = manager_type
+        if self.amqp_key_prefix:
+            manager_config["amqp_key_prefix"] = self.amqp_key_prefix
         return manager_config
 
     def _launch_containers(
