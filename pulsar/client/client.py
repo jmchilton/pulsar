@@ -26,7 +26,6 @@ from pulsar.managers.util.pykube_util import (
     galaxy_instance_id,
     Job,
     job_object_dict,
-    produce_unique_k8s_job_name,
     pull_policy,
     pykube_client_from_dict,
     stop_job,
@@ -48,6 +47,10 @@ from pulsar.client.container_job_config import (
     parse_tes_job_params,
     tes_client_from_params,
     tes_resources,
+)
+from pulsar.util.job_naming import (
+    DEFAULT_JOB_ID_PREFIX,
+    produce_unique_job_name,
 )
 
 from pulsar.managers import status as manager_status
@@ -653,6 +656,30 @@ class CoexecutionLaunchMixin(BaseRemoteConfiguredJobClient):
     execution_type: ExecutionType
     pulsar_container_image: str
 
+    # Set by each backend's _setup_*_client_properties, since the backends
+    # disagree about which destination parameter names it.
+    instance_id: Optional[str] = None
+
+    @property
+    def job_id_prefix(self) -> str:
+        """Leading component of generated job names."""
+        return self.destination_params.get("job_id_prefix") or DEFAULT_JOB_ID_PREFIX
+
+    @property
+    def _job_name(self) -> str:
+        """Name this job is known by to the backend.
+
+        Recomputed on demand rather than cached. A client is constructed fresh
+        for each operation (see ``ClientManager.get_client``), so launch, status
+        polling and cancellation each build their own instance and must agree on
+        the name. Backends whose name cannot be recomputed override this.
+        """
+        return produce_unique_job_name(
+            app_prefix=self.job_id_prefix,
+            instance_id=self.instance_id,
+            job_id=self.job_id,
+        )
+
     def default_staging_directory(self, destination_params):
         return CONTAINER_STAGING_DIRECTORY
 
@@ -838,7 +865,7 @@ class LaunchesTesContainersMixin(CoexecutionLaunchMixin):
             pulsar_finish_executor = self._container_to_executor(pulsar_finish_container)
             executors.append(pulsar_finish_executor)
 
-        name = self._tes_job_name
+        name = self._job_name
         tes_task = TesTask(
             name=name,
             executors=executors,
@@ -860,13 +887,6 @@ class LaunchesTesContainersMixin(CoexecutionLaunchMixin):
     @property
     def _tes_client(self) -> TesClient:
         return tes_client_from_params(self._tes_job_params)
-
-    @property
-    def _tes_job_name(self):
-        # currently just _k8s_job_prefix... which might be fine?
-        job_id = self.job_id
-        job_name = produce_unique_k8s_job_name(app_prefix="pulsar", job_id=job_id, instance_id=self.instance_id)
-        return job_name
 
     def _setup_tes_client_properties(self, destination_params):
         self.instance_id = tes_galaxy_instance_id(destination_params)
@@ -943,7 +963,7 @@ class LaunchesK8ContainersMixin(CoexecutionLaunchMixin):
             if self._default_pull_policy:
                 container_dict["imagePullPolicy"] = self._default_pull_policy
 
-        job_name = self._k8s_job_name
+        job_name = self._job_name
         template = {
             "metadata": {
                 "labels": {"app": job_name},
@@ -977,7 +997,7 @@ class LaunchesK8ContainersMixin(CoexecutionLaunchMixin):
         return container_dict
 
     def kill(self):
-        job_name = self._k8s_job_name
+        job_name = self._job_name
         pykube_client = self._pykube_client
         job = find_job_object_by_name(pykube_client, job_name)
         if job:
@@ -990,7 +1010,7 @@ class LaunchesK8ContainersMixin(CoexecutionLaunchMixin):
         self.kill()  # pretty much the same here right?
 
     def job_ip(self):
-        job_name = self._k8s_job_name
+        job_name = self._job_name
         pykube_client = self._pykube_client
         pod = find_pod_object_by_name(pykube_client, job_name)
         if pod:
@@ -1007,12 +1027,6 @@ class LaunchesK8ContainersMixin(CoexecutionLaunchMixin):
     @property
     def _pykube_client(self):
         return pykube_client_from_dict(self.destination_params)
-
-    @property
-    def _k8s_job_name(self):
-        job_id = self.job_id
-        job_name = produce_unique_k8s_job_name(app_prefix="pulsar", job_id=job_id, instance_id=self.instance_id)
-        return job_name
 
     def _job_spec_params(self, params):
         spec = {}
@@ -1074,7 +1088,7 @@ class K8sPollingCoexecutionJobClient(BasePollingCoexecutionJobClient, LaunchesK8
         return self._raw_check_complete()
 
     def _raw_check_complete(self):
-        job_name = self._k8s_job_name
+        job_name = self._job_name
         pykube_client = self._pykube_client
         job = find_job_object_by_name(pykube_client, job_name)
         job_failed = (job.obj['status']['failed'] > 0
@@ -1109,8 +1123,10 @@ class LaunchesGcpContainersMixin(CoexecutionLaunchMixin):
         ssd_name = destination_params.get("ssd_name", "pulsar_staging")
         return f"/mnt/disks/{ssd_name}"
 
-    def _setup_gcp_batch_client_properties(self, destination_params):
-        self.job_id_prefix = gcp_job_id_prefix(destination_params)
+    @property
+    def job_id_prefix(self) -> str:
+        """GCP additionally honours ``galaxy_instance_id`` for the prefix."""
+        return gcp_job_id_prefix(self.destination_params)
 
     def _launch_containers(
         self,
@@ -1137,7 +1153,7 @@ class LaunchesGcpContainersMixin(CoexecutionLaunchMixin):
     def _job_name(self):
         if not hasattr(self, '_cached_job_name'):
             job_id = self.job_id
-            prefix = getattr(self, 'job_id_prefix', 'pulsar')
+            prefix = self.job_id_prefix
             timestamp = int(time.time())
             self._cached_job_name = f"{prefix}-{job_id}-{timestamp}"
         return self._cached_job_name
@@ -1151,10 +1167,6 @@ class LaunchesGcpContainersMixin(CoexecutionLaunchMixin):
 class GcpMessageCoexecutionJobClient(BaseMessageCoexecutionJobClient, LaunchesGcpContainersMixin):
     """A client that co-executes pods via GCP and depends on amqp for status updates."""
 
-    def __init__(self, destination_params, job_id, client_manager):
-        super().__init__(destination_params, job_id, client_manager)
-        self._setup_gcp_batch_client_properties(destination_params)
-
     def kill(self):
         if str(self.destination_params.get("delete_batch_job", "true")).lower() not in ("false", "0", "no"):
             gcp_job_params = self._gcp_job_params
@@ -1166,10 +1178,6 @@ class GcpMessageCoexecutionJobClient(BaseMessageCoexecutionJobClient, LaunchesGc
 
 class GcpPollingCoexecutionJobClient(BasePollingCoexecutionJobClient, LaunchesGcpContainersMixin):
     """A client that co-executes pods via GCP and doesn't depend on amqp."""
-
-    def __init__(self, destination_params, job_id, client_manager):
-        super().__init__(destination_params, job_id, client_manager)
-        self._setup_gcp_batch_client_properties(destination_params)
 
     def kill(self):
         if str(self.destination_params.get("delete_batch_job", "true")).lower() not in ("false", "0", "no"):

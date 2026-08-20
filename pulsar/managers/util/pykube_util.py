@@ -2,7 +2,6 @@
 import logging
 import os
 import re
-import uuid
 
 try:
     from pykube.config import KubeConfig
@@ -18,6 +17,8 @@ except ImportError as exc:
     K8S_IMPORT_MESSAGE = ('The Python pykube package is required to use '
                           'this feature, please install it or correct the '
                           'following error:\nImportError %s' % str(exc))
+
+from pulsar.util.job_naming import produce_unique_job_name
 
 log = logging.getLogger(__name__)
 
@@ -47,17 +48,12 @@ def pykube_client_from_dict(params):
 
 
 def produce_unique_k8s_job_name(app_prefix=None, instance_id=None, job_id=None):
-    if job_id is None:
-        job_id = str(uuid.uuid4())
+    """Backwards-compatible alias for :func:`pulsar.util.job_naming.produce_unique_job_name`.
 
-    job_name = ""
-    if app_prefix:
-        job_name += "%s-" % app_prefix
-
-    if instance_id and len(instance_id) > 0:
-        job_name += "%s-" % instance_id
-
-    return job_name + job_id
+    The implementation is not k8s-specific and is shared by the TES and GCP
+    Batch clients, so it now lives in ``pulsar.util.job_naming``.
+    """
+    return produce_unique_job_name(app_prefix=app_prefix, instance_id=instance_id, job_id=job_id)
 
 
 def pull_policy(params):

@@ -1,11 +1,29 @@
 import os
+import subprocess
+import sys
 import tempfile
 from collections import deque
 
-from pulsar.client.client import JobClient
+from pulsar.client.client import (
+    JobClient,
+    K8sMessageCoexecutionJobClient,
+    K8sPollingCoexecutionJobClient,
+    TesMessageCoexecutionJobClient,
+    TesPollingCoexecutionJobClient,
+)
 from pulsar.client.decorators import MAX_RETRY_COUNT, retry
 from pulsar.client.manager import HttpPulsarInterface
 from pulsar.client.transport import UrllibTransport
+from pulsar.managers.util.pykube_util import produce_unique_k8s_job_name
+from pulsar.util.job_naming import produce_unique_job_name
+
+# GCP Batch deliberately names jobs differently -- see test_gcp_batch_naming.
+DETERMINISTIC_NAME_CLIENT_CLASSES = [
+    TesMessageCoexecutionJobClient,
+    TesPollingCoexecutionJobClient,
+    K8sMessageCoexecutionJobClient,
+    K8sPollingCoexecutionJobClient,
+]
 
 
 def test_with_retry():
@@ -205,3 +223,94 @@ def test_clean():
     client.expect_open(request_checker, 'OK')
     client.clean()
     request_checker.assert_called()
+
+
+def _coexecution_client_stub(client_class, destination_params=None, job_id="543", instance_id=None):
+    """Build a coexecution client without running ``__init__``.
+
+    ``BaseJobClient.__init__`` calls ``ensure_library_available``, so a real
+    instance needs the backend's client library installed. Job naming does not,
+    and this keeps the tests exercising the genuine classes and MRO.
+    """
+    client = object.__new__(client_class)
+    client.destination_params = destination_params or {}
+    client.job_id = job_id
+    client.instance_id = instance_id
+    return client
+
+
+def test_coexecution_job_name_is_stable_across_client_instances():
+    """A client is built fresh per operation, so launch/status/kill must agree."""
+    for client_class in DETERMINISTIC_NAME_CLIENT_CLASSES:
+        first = _coexecution_client_stub(client_class, instance_id="inst")
+        second = _coexecution_client_stub(client_class, instance_id="inst")
+        assert first._job_name == second._job_name, client_class.__name__
+        assert first._job_name == "pulsar-inst-543", first._job_name
+
+
+def test_coexecution_job_name_is_shared_across_backends():
+    names = {
+        client_class.__name__: _coexecution_client_stub(client_class, instance_id="inst")._job_name
+        for client_class in DETERMINISTIC_NAME_CLIENT_CLASSES
+    }
+    assert len(set(names.values())) == 1, names
+
+
+def test_coexecution_job_id_prefix_is_configurable():
+    params = {"job_id_prefix": "mysite"}
+    for client_class in DETERMINISTIC_NAME_CLIENT_CLASSES:
+        client = _coexecution_client_stub(client_class, params, instance_id="inst")
+        assert client._job_name == "mysite-inst-543", client_class.__name__
+
+
+def test_coexecution_job_name_without_instance_id():
+    for client_class in DETERMINISTIC_NAME_CLIENT_CLASSES:
+        client = _coexecution_client_stub(client_class)
+        assert client._job_name == "pulsar-543", client_class.__name__
+
+
+def test_produce_unique_job_name_matches_legacy_k8s_helper():
+    """The move out of pykube_util must not change any produced name."""
+    cases = [
+        {"app_prefix": "pulsar", "instance_id": "inst", "job_id": "543"},
+        {"app_prefix": "pulsar", "instance_id": None, "job_id": "543"},
+        {"app_prefix": None, "instance_id": "inst", "job_id": "543"},
+        {"app_prefix": None, "instance_id": None, "job_id": "543"},
+        {"app_prefix": "pulsar", "instance_id": "", "job_id": "543"},
+    ]
+    for case in cases:
+        assert produce_unique_job_name(**case) == produce_unique_k8s_job_name(**case), case
+
+
+def test_produce_unique_job_name_generates_job_id_when_missing():
+    name = produce_unique_job_name(app_prefix="pulsar", instance_id="inst")
+    assert name.startswith("pulsar-inst-")
+    assert name != produce_unique_job_name(app_prefix="pulsar", instance_id="inst")
+
+
+def _assert_imports_standalone(module):
+    """Import ``module`` in a fresh interpreter, with nothing imported first."""
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    result = subprocess.run(
+        [sys.executable, "-c", "import %s" % module],
+        cwd=repo_root,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        universal_newlines=True,
+    )
+    assert result.returncode == 0, "importing %s standalone failed:\n%s" % (module, result.stderr)
+
+
+def test_pykube_util_imports_standalone():
+    """pykube_util must not need pulsar.client to have been imported first.
+
+    ``pulsar/client/__init__.py`` eagerly imports ``client.py``, which imports
+    pykube_util -- so pulling anything out of ``pulsar.client`` at pykube_util
+    module level is a cycle. It stays hidden whenever a test imports
+    ``pulsar.client`` first, which is why this runs in a subprocess.
+    """
+    _assert_imports_standalone("pulsar.managers.util.pykube_util")
+
+
+def test_job_naming_imports_standalone():
+    _assert_imports_standalone("pulsar.util.job_naming")
