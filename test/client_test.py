@@ -1,10 +1,15 @@
 import os
+import re
 import subprocess
 import sys
 import tempfile
 from collections import deque
 
+import pytest
+
 from pulsar.client.client import (
+    GcpMessageCoexecutionJobClient,
+    GcpPollingCoexecutionJobClient,
     JobClient,
     K8sMessageCoexecutionJobClient,
     K8sPollingCoexecutionJobClient,
@@ -12,10 +17,18 @@ from pulsar.client.client import (
     TesPollingCoexecutionJobClient,
 )
 from pulsar.client.decorators import MAX_RETRY_COUNT, retry
-from pulsar.client.manager import HttpPulsarInterface
+from pulsar.client.manager import ClientManager, HttpPulsarInterface
 from pulsar.client.transport import UrllibTransport
 from pulsar.managers.util.pykube_util import produce_unique_k8s_job_name
-from pulsar.util.job_naming import produce_unique_job_name
+from pulsar.util.job_naming import (
+    produce_timestamped_job_name,
+    produce_unique_job_name,
+)
+
+GCP_CLIENT_CLASSES = [
+    GcpMessageCoexecutionJobClient,
+    GcpPollingCoexecutionJobClient,
+]
 
 # GCP Batch deliberately names jobs differently -- see test_gcp_batch_naming.
 DETERMINISTIC_NAME_CLIENT_CLASSES = [
@@ -225,7 +238,8 @@ def test_clean():
     request_checker.assert_called()
 
 
-def _coexecution_client_stub(client_class, destination_params=None, job_id="543", instance_id=None):
+def _coexecution_client_stub(client_class, destination_params=None, job_id="543", instance_id=None,
+                             external_id=None):
     """Build a coexecution client without running ``__init__``.
 
     ``BaseJobClient.__init__`` calls ``ensure_library_available``, so a real
@@ -236,6 +250,7 @@ def _coexecution_client_stub(client_class, destination_params=None, job_id="543"
     client.destination_params = destination_params or {}
     client.job_id = job_id
     client.instance_id = instance_id
+    client.external_id = external_id
     return client
 
 
@@ -314,3 +329,68 @@ def test_pykube_util_imports_standalone():
 
 def test_job_naming_imports_standalone():
     _assert_imports_standalone("pulsar.util.job_naming")
+
+
+def test_produce_timestamped_job_name_shape():
+    """Mirrors the name Galaxy's own gcp_batch runner builds."""
+    name = produce_timestamped_job_name(app_prefix="pulsar", job_id="543")
+    assert re.match(r"^pulsar-\d+-[0-9a-f]{8}-543$", name), name
+
+
+def test_produce_timestamped_job_name_is_unique_within_one_second():
+    names = {produce_timestamped_job_name(app_prefix="pulsar", job_id="543") for _ in range(200)}
+    assert len(names) == 200
+
+
+def test_produce_timestamped_job_name_defaults_prefix():
+    assert produce_timestamped_job_name(job_id="543").startswith("pulsar-")
+
+
+def test_gcp_job_name_honours_prefix_and_instance_id():
+    for client_class in GCP_CLIENT_CLASSES:
+        client = _coexecution_client_stub(client_class, {"galaxy_instance_id": "inst"})
+        assert client._new_job_name().startswith("inst-"), client_class.__name__
+        client = _coexecution_client_stub(client_class, {"job_id_prefix": "mysite", "galaxy_instance_id": "inst"})
+        assert client._new_job_name().startswith("mysite-"), client_class.__name__
+        client = _coexecution_client_stub(client_class, {})
+        assert client._new_job_name().startswith("pulsar-"), client_class.__name__
+
+
+def test_gcp_job_name_is_never_recomputed():
+    """The deterministic _job_name inherited from the mixin must not be usable here."""
+    for client_class in GCP_CLIENT_CLASSES:
+        client = _coexecution_client_stub(client_class, {})
+        with pytest.raises(NotImplementedError):
+            client._job_name
+
+
+def test_gcp_operations_require_the_stored_job_name():
+    for client_class in GCP_CLIENT_CLASSES:
+        client = _coexecution_client_stub(client_class, {})
+        with pytest.raises(Exception, match="No backend job name recorded"):
+            client._require_external_id()
+        client = _coexecution_client_stub(client_class, {}, external_id="pulsar-1-deadbeef-543")
+        assert client._require_external_id() == "pulsar-1-deadbeef-543"
+
+
+def test_tes_task_id_prefers_the_id_tes_assigned():
+    for client_class in [TesMessageCoexecutionJobClient, TesPollingCoexecutionJobClient]:
+        client = _coexecution_client_stub(client_class, {}, external_id="tes-task-abc")
+        assert client._tes_task_id == "tes-task-abc", client_class.__name__
+        # Older Galaxy releases only supply it on the kill path, as the job id.
+        client = _coexecution_client_stub(client_class, {}, job_id="tes-task-abc")
+        assert client._tes_task_id == "tes-task-abc", client_class.__name__
+
+
+def test_external_id_read_from_destination_params():
+    interface = HttpPulsarInterface({"url": "http://test:803/"}, TestTransport(None))
+    client = JobClient({"external_id": "pulsar-1-deadbeef-543"}, "543", interface)
+    assert client.external_id == "pulsar-1-deadbeef-543"
+    assert JobClient({}, "543", interface).external_id is None
+
+
+def test_client_manager_passes_external_id_through():
+    """Galaxy hands the stored name to get_client as a keyword argument."""
+    manager = ClientManager(url="http://test:803/")
+    client = manager.get_client({"url": "http://test:803/"}, "543", external_id="pulsar-1-deadbeef-543")
+    assert client.external_id == "pulsar-1-deadbeef-543"

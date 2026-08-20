@@ -1,6 +1,5 @@
 import logging
 import os
-import time
 from enum import Enum
 from typing import (
     Any,
@@ -50,6 +49,7 @@ from pulsar.client.container_job_config import (
 )
 from pulsar.util.job_naming import (
     DEFAULT_JOB_ID_PREFIX,
+    produce_timestamped_job_name,
     produce_unique_job_name,
 )
 
@@ -121,6 +121,9 @@ class BaseJobClient:
         self.env = destination_params.get("env", [])
         self.files_endpoint = destination_params.get("files_endpoint", None)
         self.token_endpoint = destination_params.get("token_endpoint", None)
+        # Name the backend knows this job by, when that name cannot be derived
+        # from the job id. Supplied by Galaxy from the stored external id.
+        self.external_id = destination_params.get("external_id", None)
 
         default_file_action = self.destination_params.get("default_file_action", "transfer")
         if default_file_action not in actions:
@@ -680,6 +683,17 @@ class CoexecutionLaunchMixin(BaseRemoteConfiguredJobClient):
             job_id=self.job_id,
         )
 
+    def _require_external_id(self) -> str:
+        """The backend's name for this job, for backends that cannot recompute it."""
+        external_id = self.external_id
+        if not external_id:
+            raise Exception(
+                "No backend job name recorded for job [%s]. The name is assigned at "
+                "submission and cannot be recomputed, so a Galaxy that does not pass "
+                "external_id through to the Pulsar client cannot track this job." % self.job_id
+            )
+        return external_id
+
     def default_staging_directory(self, destination_params):
         return CONTAINER_STAGING_DIRECTORY
 
@@ -888,17 +902,26 @@ class LaunchesTesContainersMixin(CoexecutionLaunchMixin):
     def _tes_client(self) -> TesClient:
         return tes_client_from_params(self._tes_job_params)
 
+    @property
+    def _tes_task_id(self) -> str:
+        """Id TES assigned at submission, which is not the name we asked for.
+
+        Galaxy passes it back as the external id. Older Galaxy releases only
+        supply it on the kill path, where it arrives as the job id instead.
+        """
+        return self.external_id or self.job_id
+
     def _setup_tes_client_properties(self, destination_params):
         self.instance_id = tes_galaxy_instance_id(destination_params)
 
     def kill(self):
-        self._tes_client.cancel_task(self.job_id)
+        self._tes_client.cancel_task(self._tes_task_id)
 
     def clean(self):
         pass
 
     def raw_check_complete(self) -> Dict[str, Any]:
-        tes_task: TesTask = self._tes_client.get_task(self.job_id, "FULL")
+        tes_task: TesTask = self._tes_client.get_task(self._tes_task_id, "FULL")
         tes_state = tes_task.state
         return {
             "status": tes_state_to_pulsar_status(tes_state),
@@ -1133,7 +1156,7 @@ class LaunchesGcpContainersMixin(CoexecutionLaunchMixin):
         pulsar_submit_container: CoexecutionContainerCommand,
         tool_container: Optional[CoexecutionContainerCommand],
         pulsar_finish_container: Optional[CoexecutionContainerCommand]
-    ) -> None:
+    ) -> ExternalId:
         assert pulsar_finish_container is None
         gcp_job_params = self._gcp_job_params
         job = gcp_job_template(gcp_job_params)
@@ -1144,19 +1167,41 @@ class LaunchesGcpContainersMixin(CoexecutionLaunchMixin):
             tool_runnable = container_command_to_gcp_runnable("tool-container", tool_container)
             job.task_groups[0].task_spec.runnables.append(tool_runnable)
 
-        job_name = self._job_name
+        job_name = self._new_job_name()
         create_request = gcp_job_request(gcp_job_params, job, job_name)
         client = gcp_client(gcp_job_params.credentials_file)
-        job = client.create_job(create_request)
+        client.create_job(create_request)
+        return ExternalId(job_name)
 
     @property
-    def _job_name(self):
-        if not hasattr(self, '_cached_job_name'):
-            job_id = self.job_id
-            prefix = self.job_id_prefix
-            timestamp = int(time.time())
-            self._cached_job_name = f"{prefix}-{job_id}-{timestamp}"
-        return self._cached_job_name
+    def _job_name(self) -> str:
+        """Not available: a Batch job name is generated once and then stored."""
+        raise NotImplementedError(
+            "GCP Batch job names cannot be recomputed -- use _new_job_name when submitting "
+            "and _require_external_id afterwards."
+        )
+
+    def _new_job_name(self) -> str:
+        """Name for a job about to be submitted.
+
+        Batch job ids only have to be unique within a project and region, and
+        completed jobs keep holding theirs, so this carries a clock reading and
+        four random bytes rather than being derived from the Galaxy job id --
+        two Galaxy instances sharing a project, and a resubmission of one Galaxy
+        job, both otherwise land on the same name. Returned to Galaxy as the
+        external id, which is how kill and status find the job again.
+        """
+        return produce_timestamped_job_name(app_prefix=self.job_id_prefix, job_id=self.job_id)
+
+    def _delete_batch_job(self) -> None:
+        if str(self.destination_params.get("delete_batch_job", "true")).lower() in ("false", "0", "no"):
+            return
+        gcp_job_params = self._gcp_job_params
+        job_name = self._require_external_id()
+        try:
+            delete_gcp_job(gcp_job_params.project_id, gcp_job_params.region, job_name, gcp_job_params.credentials_file)
+        except Exception:
+            log.warning("Failed to delete GCP Batch job %s", job_name)
 
     @property
     def _gcp_job_params(self):
@@ -1168,24 +1213,14 @@ class GcpMessageCoexecutionJobClient(BaseMessageCoexecutionJobClient, LaunchesGc
     """A client that co-executes pods via GCP and depends on amqp for status updates."""
 
     def kill(self):
-        if str(self.destination_params.get("delete_batch_job", "true")).lower() not in ("false", "0", "no"):
-            gcp_job_params = self._gcp_job_params
-            try:
-                delete_gcp_job(gcp_job_params.project_id, gcp_job_params.region, self._job_name, gcp_job_params.credentials_file)
-            except Exception:
-                log.warning("Failed to delete GCP Batch job %s", self._job_name)
+        self._delete_batch_job()
 
 
 class GcpPollingCoexecutionJobClient(BasePollingCoexecutionJobClient, LaunchesGcpContainersMixin):
     """A client that co-executes pods via GCP and doesn't depend on amqp."""
 
     def kill(self):
-        if str(self.destination_params.get("delete_batch_job", "true")).lower() not in ("false", "0", "no"):
-            gcp_job_params = self._gcp_job_params
-            try:
-                delete_gcp_job(gcp_job_params.project_id, gcp_job_params.region, self._job_name, gcp_job_params.credentials_file)
-            except Exception:
-                log.warning("Failed to delete GCP Batch job %s", self._job_name)
+        self._delete_batch_job()
 
     def clean(self):
         pass
@@ -1196,7 +1231,8 @@ class GcpPollingCoexecutionJobClient(BasePollingCoexecutionJobClient, LaunchesGc
 
     def raw_check_complete(self) -> Dict[str, Any]:
         gcp_job_params = self._gcp_job_params
-        job = get_gcp_job(gcp_job_params.project_id, gcp_job_params.region, self._job_name, gcp_job_params.credentials_file)
+        job_name = self._require_external_id()
+        job = get_gcp_job(gcp_job_params.project_id, gcp_job_params.region, job_name, gcp_job_params.credentials_file)
         status = job.status
         state = status.state
         return {
