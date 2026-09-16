@@ -11,6 +11,8 @@ IN_VENV=if [ -f $(VENV)/bin/activate ]; then . $(VENV)/bin/activate; fi;
 # TODO: add this upstream as a remote if it doesn't already exist.
 UPSTREAM?=galaxyproject
 SOURCE_DIR?=pulsar
+# Captured output of the docs build, inspected by lint-docs.
+DOCS_LINT_LOG=docs/_build/lint-docs.log
 BUILD_SCRIPTS_DIR=tools
 DEV_RELEASE?=0
 VERSION?=$(shell DEV_RELEASE=$(DEV_RELEASE) python $(BUILD_SCRIPTS_DIR)/print_version_for_release.py $(SOURCE_DIR) $(DEV_RELEASE))
@@ -111,8 +113,10 @@ docs: ready-docs
 	$(IN_VENV) $(MAKE) -C docs html
 
 lint-docs: ready-docs
-	if [ -f .venv/bin/activate ]; then . .venv/bin/activate; fi; $(MAKE) -C docs clean
-	if [ -f .venv/bin/activate ]; then . .venv/bin/activate; fi; ! (make -C docs html 2>&1 | grep -v 'more than one target found\|nonlocal image URI found\|included in any toctree' | grep WARNING)
+	$(IN_VENV) $(MAKE) -C docs clean
+	mkdir -p $(dir $(DOCS_LINT_LOG))
+	$(IN_VENV) $(MAKE) -C docs html > $(DOCS_LINT_LOG) 2>&1 || { cat $(DOCS_LINT_LOG); exit 1; }
+	! grep -v 'more than one target found\|nonlocal image URI found\|included in any toctree' $(DOCS_LINT_LOG) | grep WARNING
 
 _open-docs:
 	open docs/_build/html/index.html || xdg-open docs/_build/html/index.html
