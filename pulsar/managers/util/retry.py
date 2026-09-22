@@ -137,12 +137,13 @@ def _retry_over_time(
         immediately without sleeping. Defaults to retrying on every caught
         exception.
     :keyword max_retries_for: Optional ``(exc) -> Optional[int]`` returning a
-        retry limit for this particular exception, or None to use
-        ``max_retries``. It can only tighten the limit, never loosen it, so a
-        deployment that retries nothing keeps retrying nothing.
+        retry limit for this exception type, or None to use ``max_retries``.
+        Retries of other exception types do not consume this limit. It can
+        only tighten the global limit, never loosen it, so a deployment that
+        retries nothing keeps retrying nothing.
 
     """
-    retries = 0
+    retries_by_exception_type = {}
     interval_range = __fxrange(
         interval_start, interval_max + interval_start, interval_step, repeatlast=True
     )
@@ -153,15 +154,16 @@ def _retry_over_time(
             if not should_retry(exc):
                 raise
             # A falsy max_retries has always meant "no limit" here.
-            limit = max_retries if max_retries else None
+            if max_retries and retries >= max_retries:
+                raise
             if max_retries_for is not None:
                 per_exception_limit = max_retries_for(exc)
-                if per_exception_limit is not None and (
-                    limit is None or per_exception_limit < limit
-                ):
-                    limit = per_exception_limit
-            if limit is not None and retries >= limit:
-                raise
+                if per_exception_limit is not None:
+                    exception_type = type(exc)
+                    exception_retries = retries_by_exception_type.get(exception_type, 0)
+                    if exception_retries >= per_exception_limit:
+                        raise
+                    retries_by_exception_type[exception_type] = exception_retries + 1
             tts = float(
                 errback(exc, interval_range, retries)
                 if errback

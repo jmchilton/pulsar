@@ -121,6 +121,22 @@ def test_max_retries_for_leaves_other_exceptions_on_the_global_budget():
     assert action_tracker.count == 4, action_tracker.count
 
 
+def test_max_retries_for_counts_only_matching_exceptions():
+    """Failures using the global budget must not consume a later
+    exception-specific budget."""
+    action_tracker = SequencedActionTracker(
+        [TransientError, TransientError, FileNotFoundError, FileNotFoundError]
+    )
+    executor = RetryActionExecutor(
+        max_retries=100,
+        interval_start=.01,
+        interval_step=.01,
+        max_retries_for=missing_file_retry_budget(2),
+    )
+    assert executor.execute(action_tracker.execute) == 42
+    assert action_tracker.count == 5, action_tracker.count
+
+
 def test_missing_file_retry_budget_matches_only_missing_files():
     """ENOENT is a missing output. A stale NFS handle (ESTALE) and an I/O error
     both surface as a plain OSError and must keep the global budget."""
@@ -160,3 +176,17 @@ class ActionTracker:
             raise self.fail_how()
         else:
             return 42
+
+
+class SequencedActionTracker:
+
+    def __init__(self, failures):
+        self.failures = iter(failures)
+        self.count = 0
+
+    def execute(self):
+        self.count += 1
+        fail_how = next(self.failures, None)
+        if fail_how is not None:
+            raise fail_how()
+        return 42
