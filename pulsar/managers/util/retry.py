@@ -17,7 +17,36 @@ def _always_retry(_exc):
 
 DEFAULT_SHOULD_RETRY = _always_retry
 
+# Long enough to ride out NFS close-to-open lag (attribute caches are
+# typically capped at 30-60s), short enough that a tool that simply did not
+# produce an output is reported in seconds rather than after the full budget.
+DEFAULT_MISSING_FILE_MAX_RETRIES = 5
+
 DEFAULT_DESCRIPTION = "action"
+
+
+def missing_file_retry_budget(max_retries=DEFAULT_MISSING_FILE_MAX_RETRIES):
+    """Build a ``max_retries_for`` hook that caps retries for a missing file.
+
+    ``FileNotFoundError`` (ENOENT) while staging means the file is not there,
+    most often an output the tool never produced. No number of retries will
+    conjure it, but a small budget still absorbs NFS close-to-open lag, where
+    the node that wrote the file has it and the reading node's cached lookup
+    has not caught up yet.
+
+    Other filesystem failures keep the global budget, because they are the ones
+    that really do resolve on their own: a stale NFS handle (ESTALE) and an I/O
+    error both surface as a plain ``OSError``, a hung mount as ``TimeoutError``.
+
+    ``max_retries`` follows the same convention as the global setting: 0 means
+    no budget of its own, a negative value means no retries at all.
+    """
+    def max_retries_for(exc):
+        if max_retries and isinstance(exc, FileNotFoundError):
+            return max_retries
+        return None
+
+    return max_retries_for
 
 
 class RetryActionExecutor:
@@ -34,6 +63,7 @@ class RetryActionExecutor:
         self.errback = kwds.get("errback", self.__default_errback)
         self.catch = kwds.get("catch", DEFAULT_CATCH)
         self.should_retry = kwds.get("should_retry", DEFAULT_SHOULD_RETRY)
+        self.max_retries_for = kwds.get("max_retries_for")
 
         self.default_description = kwds.get("description", DEFAULT_DESCRIPTION)
 
@@ -56,6 +86,7 @@ class RetryActionExecutor:
             interval_max=self.interval_max,
             errback=on_error,
             should_retry=self.should_retry,
+            max_retries_for=self.max_retries_for,
         )
 
     def __default_errback(self, exc, interval, description=None):
@@ -82,6 +113,7 @@ def _retry_over_time(
     interval_step=2,
     interval_max=30,
     should_retry=DEFAULT_SHOULD_RETRY,
+    max_retries_for=None,
 ):
     """Retry the function over and over until max retries is exceeded.
 
@@ -104,6 +136,10 @@ def _retry_over_time(
         caught exception. If it returns False the exception is re-raised
         immediately without sleeping. Defaults to retrying on every caught
         exception.
+    :keyword max_retries_for: Optional ``(exc) -> Optional[int]`` returning a
+        retry limit for this particular exception, or None to use
+        ``max_retries``. It can only tighten the limit, never loosen it, so a
+        deployment that retries nothing keeps retrying nothing.
 
     """
     retries = 0
@@ -116,7 +152,15 @@ def _retry_over_time(
         except catch as exc:
             if not should_retry(exc):
                 raise
-            if max_retries and retries >= max_retries:
+            # A falsy max_retries has always meant "no limit" here.
+            limit = max_retries if max_retries else None
+            if max_retries_for is not None:
+                per_exception_limit = max_retries_for(exc)
+                if per_exception_limit is not None and (
+                    limit is None or per_exception_limit < limit
+                ):
+                    limit = per_exception_limit
+            if limit is not None and retries >= limit:
                 raise
             tts = float(
                 errback(exc, interval_range, retries)

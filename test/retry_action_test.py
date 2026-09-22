@@ -1,4 +1,7 @@
-from pulsar.managers.util.retry import RetryActionExecutor
+from pulsar.managers.util.retry import (
+    missing_file_retry_budget,
+    RetryActionExecutor,
+)
 
 
 def test_retry_defaults():
@@ -60,6 +63,80 @@ def test_should_retry_true_still_retries():
     result = executor.execute(action_tracker.execute)
     assert result == 42
     assert action_tracker.count == 3, action_tracker.count
+
+
+def test_max_retries_for_tightens_the_global_budget():
+    """A per-exception budget caps retries for exceptions it recognizes, while
+    the admin's larger global budget stays in force for everything else."""
+    action_tracker = ActionTracker(fail_count=10, fail_how=FileNotFoundError)
+    executor = RetryActionExecutor(
+        max_retries=10,
+        interval_start=.01,
+        interval_step=.01,
+        max_retries_for=missing_file_retry_budget(2),
+    )
+    try:
+        executor.execute(action_tracker.execute)
+    except FileNotFoundError:
+        pass
+    else:
+        raise AssertionError("FileNotFoundError should have propagated")
+    assert action_tracker.count == 3, action_tracker.count
+
+
+def test_max_retries_for_never_loosens_the_global_budget():
+    """Pulsar retries nothing by default. A per-exception budget must not turn
+    that into five retries for missing files."""
+    action_tracker = ActionTracker(fail_count=10, fail_how=FileNotFoundError)
+    executor = RetryActionExecutor(
+        interval_start=.01,
+        interval_step=.01,
+        max_retries_for=missing_file_retry_budget(5),
+    )
+    try:
+        executor.execute(action_tracker.execute)
+    except FileNotFoundError:
+        pass
+    else:
+        raise AssertionError("FileNotFoundError should have propagated")
+    assert action_tracker.count == 1, action_tracker.count
+
+
+def test_max_retries_for_leaves_other_exceptions_on_the_global_budget():
+    """A budget that returns None defers to the global one - this is what keeps
+    the 'Galaxy is restarting' 5xx case retrying for as long as it did."""
+    action_tracker = ActionTracker(fail_count=10, fail_how=TransientError)
+    executor = RetryActionExecutor(
+        max_retries=3,
+        interval_start=.01,
+        interval_step=.01,
+        max_retries_for=missing_file_retry_budget(1),
+    )
+    try:
+        executor.execute(action_tracker.execute)
+    except TransientError:
+        pass
+    else:
+        raise AssertionError("TransientError should have propagated")
+    assert action_tracker.count == 4, action_tracker.count
+
+
+def test_missing_file_retry_budget_matches_only_missing_files():
+    """ENOENT is a missing output. A stale NFS handle (ESTALE) and an I/O error
+    both surface as a plain OSError and must keep the global budget."""
+    budget = missing_file_retry_budget(5)
+    assert budget(FileNotFoundError(2, "No such file or directory")) == 5
+    assert budget(OSError(70, "Stale NFS file handle")) is None
+    assert budget(OSError(5, "Input/output error")) is None
+    assert budget(TimeoutError()) is None
+    assert budget(TransientError()) is None
+
+
+def test_missing_file_retry_budget_can_be_switched_off():
+    """0 carries the same meaning it does for max_retries - no budget of its
+    own - so a site that wants the old behaviour back can ask for it."""
+    budget = missing_file_retry_budget(0)
+    assert budget(FileNotFoundError(2, "No such file or directory")) is None
 
 
 class PermanentError(Exception):
