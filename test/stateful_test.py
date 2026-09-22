@@ -187,3 +187,26 @@ def _wait_for_callback(proxy, timeout=5):
             return
         time.sleep(.01)
     raise AssertionError("Timed out waiting for a state change callback.")
+
+
+def test_staging_executor_gives_missing_files_their_own_budget():
+    """An admin raises the staging budget for a Galaxy that is restarting, not
+    for an output the tool never wrote."""
+    executor = stateful._staging_retry_action_executor({}, "postprocess_action_")
+    assert executor.max_retries_for(FileNotFoundError(2, "No such file")) == (
+        stateful.DEFAULT_MISSING_FILE_MAX_RETRIES
+    )
+    # A stale handle or an I/O error is infrastructure, and keeps the big budget.
+    assert executor.max_retries_for(OSError(5, "Input/output error")) is None
+
+
+def test_staging_executor_missing_file_budget_is_configurable():
+    executor = stateful._staging_retry_action_executor(
+        {
+            "postprocess_action_max_retries": 100,
+            "postprocess_action_missing_file_max_retries": 2,
+        },
+        "postprocess_action_",
+    )
+    assert executor.max_retries == 100
+    assert executor.max_retries_for(FileNotFoundError(2, "No such file")) == 2

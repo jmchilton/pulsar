@@ -189,10 +189,22 @@ this may be a bit counter-intuitive but is consistent with Kombu_.
     preprocess_action_interval_start: 2
     preprocess_action_interval_step: 2
     preprocess_action_interval_max: 30
+    preprocess_action_missing_file_max_retries: 5
     postprocess_action_max_retries: -1
     postprocess_action_interval_start: 2
     postprocess_action_interval_step: 2
     postprocess_action_interval_max: 30
+    postprocess_action_missing_file_max_retries: 5
+
+``XXX_missing_file_max_retries`` caps the retries spent on a file that is not
+there. Raising ``XXX_max_retries`` is how you ride out a Galaxy that is
+restarting or overloaded, but an output the tool never wrote will not appear on
+the hundredth attempt either, and waiting out the full budget delays the
+failure the user is waiting for. The smaller budget still absorbs NFS
+close-to-open lag, where the node that wrote the file has it and the reading
+node's cached lookup has not caught up. It only ever tightens
+``XXX_max_retries``, so a manager that retries nothing still retries nothing.
+Set it to 0 to go back to one shared budget.
 
 
 .. _DRMAA: http://www.drmaa.org/

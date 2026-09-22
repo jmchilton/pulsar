@@ -33,7 +33,11 @@ from pulsar.managers import (
     ManagerProxy,
     status,
 )
-from pulsar.managers.util.retry import RetryActionExecutor
+from pulsar.managers.util.retry import (
+    DEFAULT_MISSING_FILE_MAX_RETRIES,
+    missing_file_retry_budget,
+    RetryActionExecutor,
+)
 from .staging import (
     postprocess,
     preprocess,
@@ -74,6 +78,25 @@ ACTIVE_STATUS_LAUNCHED = "launched"
 DEFAULT_MIN_POLLING_INTERVAL = 0.5
 
 
+def _staging_retry_action_executor(manager_options, prefix):
+    """Build the retry executor for one half of staging.
+
+    Admins raise the staging retry budget to ride out a Galaxy that is
+    restarting or overloaded. That budget should not also be spent on an output
+    the tool never wrote, so missing files get their own, smaller one, which
+    ``<prefix>missing_file_max_retries`` overrides.
+    """
+    retry_action_kwds = filter_destination_params(manager_options, prefix)
+    retry_action_kwds.setdefault("should_retry", is_transient_http_error)
+    missing_file_max_retries = retry_action_kwds.pop(
+        "missing_file_max_retries", DEFAULT_MISSING_FILE_MAX_RETRIES
+    )
+    retry_action_kwds.setdefault(
+        "max_retries_for", missing_file_retry_budget(int(missing_file_max_retries))
+    )
+    return RetryActionExecutor(**retry_action_kwds)
+
+
 class StatefulManagerProxy(ManagerProxy):
     """ """
 
@@ -82,19 +105,11 @@ class StatefulManagerProxy(ManagerProxy):
         min_polling_interval = float(
             manager_options.get("min_polling_interval", DEFAULT_MIN_POLLING_INTERVAL)
         )
-        preprocess_retry_action_kwds = filter_destination_params(
+        self.__preprocess_action_executor = _staging_retry_action_executor(
             manager_options, "preprocess_action_"
         )
-        postprocess_retry_action_kwds = filter_destination_params(
+        self.__postprocess_action_executor = _staging_retry_action_executor(
             manager_options, "postprocess_action_"
-        )
-        preprocess_retry_action_kwds.setdefault("should_retry", is_transient_http_error)
-        postprocess_retry_action_kwds.setdefault("should_retry", is_transient_http_error)
-        self.__preprocess_action_executor = RetryActionExecutor(
-            **preprocess_retry_action_kwds
-        )
-        self.__postprocess_action_executor = RetryActionExecutor(
-            **postprocess_retry_action_kwds
         )
         self.min_polling_interval = datetime.timedelta(0, min_polling_interval)
         self.active_jobs = ActiveJobs.from_manager(manager)
