@@ -79,13 +79,7 @@ DEFAULT_MIN_POLLING_INTERVAL = 0.5
 
 
 def _staging_retry_action_executor(manager_options, prefix):
-    """Build the retry executor for one half of staging.
-
-    Admins raise the staging retry budget to ride out a Galaxy that is
-    restarting or overloaded. That budget should not also be spent on an output
-    the tool never wrote, so missing files get their own, smaller one, which
-    ``<prefix>missing_file_max_retries`` overrides.
-    """
+    """Build a staging retry executor from prefixed manager options."""
     retry_action_kwds = filter_destination_params(manager_options, prefix)
     retry_action_kwds.setdefault("should_retry", is_transient_http_error)
     missing_file_max_retries = retry_action_kwds.pop(

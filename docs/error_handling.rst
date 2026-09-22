@@ -289,11 +289,8 @@ Configuration knobs (per-manager YAML):
 * ``preprocess_action_max_retries`` / ``postprocess_action_max_retries``
 * ``preprocess_action_interval_start`` / ``_step`` / ``_max``
 * ``preprocess_action_missing_file_max_retries`` /
-  ``postprocess_action_missing_file_max_retries`` — a separate, smaller budget
-  for a file that is not there (``FileNotFoundError``), which is usually an
-  output the tool never wrote. Defaults to 5. It can only tighten the budget
-  above, never widen it. A stale NFS handle or an I/O error is not this case —
-  both surface as a plain ``OSError`` and keep the full budget.
+  ``postprocess_action_missing_file_max_retries`` — limits
+  ``FileNotFoundError`` retries (default 5); 0 uses the shared budget
 * ``preprocess_action_should_retry`` (advanced — replaces the default
   predicate; only do this if you understand which errors are safe to
   retry in your environment)

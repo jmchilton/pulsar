@@ -24,13 +24,8 @@ History
 * Report DRM-side job failures as ``failed`` instead of ``complete`` (thanks to
   `@gkr0110`_), and make ``failed`` terminal in ``StatefulManagerProxy`` so such
   jobs are deactivated, staged back, and reported to the client.
-* Give a missing file its own, smaller staging retry budget
-  (``{pre,post}process_action_missing_file_max_retries``, default 5). Raising
-  the staging retry budget rides out a Galaxy that is restarting, but an output
-  a tool never wrote will not appear on the hundredth attempt, and waiting out
-  the full budget delayed the failure by up to an hour. The smaller budget
-  still covers NFS close-to-open lag, and it only ever tightens the existing
-  setting, so a manager that retries nothing is unaffected.
+* Add a separate staging retry limit for missing files
+  (``{pre,post}process_action_missing_file_max_retries``, default 5).
 * Remove the experimental Apache Mesos framework and executor. Apache Mesos has
   been retired to the Apache Attic, the ``mesos.native`` bindings the code
   imported were only ever distributed with a Mesos build, and nothing here has

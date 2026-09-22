@@ -17,30 +17,14 @@ def _always_retry(_exc):
 
 DEFAULT_SHOULD_RETRY = _always_retry
 
-# Long enough to ride out NFS close-to-open lag (attribute caches are
-# typically capped at 30-60s), short enough that a tool that simply did not
-# produce an output is reported in seconds rather than after the full budget.
+# Allow brief filesystem lag without spending the full staging retry budget.
 DEFAULT_MISSING_FILE_MAX_RETRIES = 5
 
 DEFAULT_DESCRIPTION = "action"
 
 
 def missing_file_retry_budget(max_retries=DEFAULT_MISSING_FILE_MAX_RETRIES):
-    """Build a ``max_retries_for`` hook that caps retries for a missing file.
-
-    ``FileNotFoundError`` (ENOENT) while staging means the file is not there,
-    most often an output the tool never produced. No number of retries will
-    conjure it, but a small budget still absorbs NFS close-to-open lag, where
-    the node that wrote the file has it and the reading node's cached lookup
-    has not caught up yet.
-
-    Other filesystem failures keep the global budget, because they are the ones
-    that really do resolve on their own: a stale NFS handle (ESTALE) and an I/O
-    error both surface as a plain ``OSError``, a hung mount as ``TimeoutError``.
-
-    ``max_retries`` follows the same convention as the global setting: 0 means
-    no budget of its own, a negative value means no retries at all.
-    """
+    """Return a retry limit for missing files and defer all other errors."""
     def max_retries_for(exc):
         if max_retries and isinstance(exc, FileNotFoundError):
             return max_retries
@@ -136,11 +120,9 @@ def _retry_over_time(
         caught exception. If it returns False the exception is re-raised
         immediately without sleeping. Defaults to retrying on every caught
         exception.
-    :keyword max_retries_for: Optional ``(exc) -> Optional[int]`` returning a
-        retry limit for this exception type, or None to use ``max_retries``.
-        Retries of other exception types do not consume this limit. It can
-        only tighten the global limit, never loosen it, so a deployment that
-        retries nothing keeps retrying nothing.
+    :keyword max_retries_for: Optional callback returning a retry limit for an
+        exception, or None to use ``max_retries``. Limits are counted by
+        exception type and cannot extend the global limit.
 
     """
     retries_by_exception_type = {}

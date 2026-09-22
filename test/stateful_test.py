@@ -190,13 +190,10 @@ def _wait_for_callback(proxy, timeout=5):
 
 
 def test_staging_executor_gives_missing_files_their_own_budget():
-    """An admin raises the staging budget for a Galaxy that is restarting, not
-    for an output the tool never wrote."""
     executor = stateful._staging_retry_action_executor({}, "postprocess_action_")
     assert executor.max_retries_for(FileNotFoundError(2, "No such file")) == (
         stateful.DEFAULT_MISSING_FILE_MAX_RETRIES
     )
-    # A stale handle or an I/O error is infrastructure, and keeps the big budget.
     assert executor.max_retries_for(OSError(5, "Input/output error")) is None
 
 
