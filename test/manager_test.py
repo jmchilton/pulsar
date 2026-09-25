@@ -1,5 +1,6 @@
 from os.path import join
 
+from pulsar.managers import ManagerProxy
 from pulsar.managers.unqueued import Manager
 from .test_utils import (
     BaseManagerTestCase,
@@ -67,3 +68,18 @@ class ManagerTest(BaseManagerTestCase):
 
     def test_kill(self):
         self._test_cancelling(self.manager)
+
+    def test_runner_state_survives_manager_recreation(self):
+        job_id = self.manager.setup_job("runner-state", "tool1", "1.0.0")
+        self.assertIsNone(self.manager.runner_state(job_id))
+        self.manager._record_runner_state(job_id, "walltime_reached", "time limit")
+
+        self._set_manager()
+        self.assertEqual(
+            self.manager.runner_state(job_id),
+            {"runner_state": "walltime_reached", "message": "time limit"},
+        )
+        self.assertEqual(
+            ManagerProxy(self.manager).runner_state(job_id),
+            self.manager.runner_state(job_id),
+        )

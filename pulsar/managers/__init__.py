@@ -67,6 +67,10 @@ class ManagerInterface:
         'cancelled', 'running', 'queued', and 'complete'.
         """
 
+    def runner_state(self, job_id: str) -> Optional[Dict[str, Optional[str]]]:
+        """Return an optional recorded failure reason for a terminal job."""
+        return None
+
     @abstractmethod
     def return_code(self, job_id: str) -> Union[int, bytes, str]:
         """
@@ -132,6 +136,9 @@ class ManagerProxy:
 
     def get_status(self, *args, **kwargs) -> "StateLiteral":
         return self._proxied_manager.get_status(*args, **kwargs)
+
+    def runner_state(self, *args, **kwargs) -> Optional[Dict[str, Optional[str]]]:
+        return self._proxied_manager.runner_state(*args, **kwargs)
 
     def return_code(self, *args, **kwargs) -> Union[int, bytes, str]:
         return self._proxied_manager.return_code(*args, **kwargs)

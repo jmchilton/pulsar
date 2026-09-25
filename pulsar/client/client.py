@@ -105,6 +105,10 @@ class ClientManagerProtocol(Protocol):
 class BaseJobClient:
     ensure_library_available: Optional[Callable[[], None]] = None
 
+    def get_full_status(self) -> Dict[str, Any]:
+        """Return a status payload for clients without a polling response."""
+        return {"status": self.get_status()}
+
     def __init__(self, destination_params, job_id):
         precondition = self.__class__.ensure_library_available
         precondition and precondition()
@@ -246,6 +250,9 @@ class JobClient(BaseJobClient):
         """
         check_complete_response = self._raw_execute("status", {"job_id": self.job_id})
         return check_complete_response
+
+    def get_full_status(self) -> Dict[str, Any]:
+        return self.raw_check_complete()
 
     def get_status(self):
         check_complete_response = self.raw_check_complete()
@@ -774,6 +781,9 @@ class BaseMessageCoexecutionJobClient(BaseMessageJobClient):
 
 class BasePollingCoexecutionJobClient(BaseRemoteConfiguredJobClient):
     pulsar_container_image: str
+
+    def get_full_status(self) -> Dict[str, Any]:
+        return self.raw_check_complete()
 
     def __init__(self, destination_params, job_id, client_manager):
         super().__init__(destination_params, job_id, client_manager)

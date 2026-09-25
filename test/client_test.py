@@ -202,6 +202,16 @@ def test_get_status_queued():
     request_checker.assert_called()
 
 
+def test_get_full_status_preserves_failure_reason():
+    client = TestClient()
+    request_checker = RequestChecker("jobs/543/status")
+    client.expect_open(request_checker, b'{"complete": "true", "status": "failed", "runner_state": "walltime_reached"}')
+    assert client.get_full_status() == {
+        "complete": "true", "status": "failed", "runner_state": "walltime_reached"
+    }
+    request_checker.assert_called()
+
+
 def test_kill():
     client = TestClient()
     request_checker = RequestChecker("jobs/543/cancel")

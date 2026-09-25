@@ -31,6 +31,7 @@ log = logging.getLogger(__name__)
 # should be able to replace metadata backing with non-file stuff now that
 # the abstractions are fairly well utilized.
 JOB_FILE_RETURN_CODE = "return_code"
+JOB_FILE_RUNNER_STATE = "runner_state"
 TOOL_FILE_STANDARD_OUTPUT = os.path.join("metadata", "tool_stdout")
 TOOL_FILE_STANDARD_ERROR = os.path.join("metadata", "tool_stderr")
 JOB_FILE_STANDARD_OUTPUT = os.path.join("metadata", "job_stdout")
@@ -51,6 +52,14 @@ done
 
 
 class DirectoryBaseManager(BaseManager):
+
+    def _record_runner_state(self, job_id: str, runner_state: str, message: Optional[str] = None) -> None:
+        self._job_directory(job_id).store_metadata(
+            JOB_FILE_RUNNER_STATE, {"runner_state": runner_state, "message": message}
+        )
+
+    def runner_state(self, job_id: str) -> Optional[Dict[str, Optional[str]]]:
+        return self._job_directory(job_id).load_metadata(JOB_FILE_RUNNER_STATE)
 
     def _job_file(self, job_id: str, name: str) -> str:
         return self._job_directory(job_id)._job_file(name)

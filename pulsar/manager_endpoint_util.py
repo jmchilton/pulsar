@@ -68,6 +68,11 @@ def __job_complete_dict(complete_status, manager, job_id):
         "pulsar_version": pulsar_version,
         "realized_dynamic_file_sources": realized_dynamic_file_sources(job_directory)
     }
+    runner_state = manager.runner_state(job_id)
+    if runner_state and runner_state.get("runner_state"):
+        as_dict["runner_state"] = runner_state["runner_state"]
+        if runner_state.get("message"):
+            as_dict["runner_state_message"] = runner_state["message"]
     return as_dict
 
 

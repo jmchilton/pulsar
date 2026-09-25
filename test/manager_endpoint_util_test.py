@@ -5,9 +5,46 @@ setup_job and message.ack(), for example), submit_job must NOT re-run the
 job. Once ``launch_config`` metadata is present on disk, the redelivered
 message is a no-op.
 """
+from unittest.mock import MagicMock
+
 import pytest
 
 from pulsar import manager_endpoint_util
+
+
+@pytest.mark.parametrize("runner_state", [
+    None,
+    {"runner_state": "walltime_reached", "message": "time limit"},
+    {"runner_state": "walltime_reached", "message": None},
+])
+def test_terminal_status_includes_recorded_runner_state(runner_state):
+    manager = MagicMock()
+    manager.return_code.return_value = 1
+    manager.stdout_contents.return_value = b""
+    manager.stderr_contents.return_value = b""
+    manager.job_stdout_contents.return_value = b""
+    manager.job_stderr_contents.return_value = b""
+    manager.runner_state.return_value = runner_state
+    manager.job_directory.return_value.job_directory = "/staging/j1"
+    manager.job_directory.return_value.working_directory_contents.return_value = []
+    manager.job_directory.return_value.metadata_directory_contents.return_value = []
+    manager.job_directory.return_value.outputs_directory_contents.return_value = []
+    manager.job_directory.return_value.job_directory_contents.return_value = []
+    manager.system_properties.return_value = {}
+
+    result = manager_endpoint_util.full_status(manager, "failed", "j1")
+    if runner_state:
+        assert result["runner_state"] == "walltime_reached"
+        if runner_state["message"]:
+            assert result["runner_state_message"] == "time limit"
+        else:
+            assert "runner_state_message" not in result
+    else:
+        assert "runner_state" not in result
+        assert "runner_state_message" not in result
+
+    pending = manager_endpoint_util.full_status(manager, "queued", "j1")
+    assert "runner_state" not in pending
 
 
 class _FakeJobDirectory:
