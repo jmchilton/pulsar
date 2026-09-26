@@ -16,18 +16,16 @@ from typing import (
 from galaxy.tool_util.parser.output_collection_def import dataset_collection_description
 from galaxy.util.bunch import Bunch
 
+from ..constants import (  # noqa: F401 - re-exported for existing importers
+    COMMAND_VERSION_FILENAME,
+    DEFAULT_DYNAMIC_COLLECTION_PATTERN,
+    EXTENDED_METADATA_DYNAMIC_COLLECTION_PATTERN,
+)
 from ..util import PathHelper
 
 if TYPE_CHECKING:
     from galaxy.tool_util.parser.interface import RequiredFiles
 
-COMMAND_VERSION_FILENAME = "COMMAND_VERSION"
-DEFAULT_DYNAMIC_COLLECTION_PATTERN = [
-    r"primary_.*|galaxy.json|metadata_.*|dataset_\d+\.dat|__instrument_.*|dataset_\d+_files.+|outputs_populated/.*|tool_stdout|tool_stderr"
-]
-EXTENDED_METADATA_DYNAMIC_COLLECTION_PATTERN = [
-    r"outputs_populated/.*"
-]
 
 
 class DynamicFileSourceType(str, Enum):

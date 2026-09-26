@@ -39,22 +39,45 @@ in the ``galaxy.ini`` file.
 
 """
 
-from .client import OutputNotFoundException
-from .destination import url_to_destination_params
-from .exceptions import PulsarClientTransportError
-from .manager import build_client_manager
-from .path_mapper import PathMapper
-from .staging import (
-    CLIENT_INPUT_PATH_TYPES,
-    ClientInput,
-    ClientInputs,
-    ClientJobDescription,
-    ClientOutputs,
-    EXTENDED_METADATA_DYNAMIC_COLLECTION_PATTERN,
-    PulsarOutputs,
-)
-from .staging.down import finish_job
-from .staging.up import submit_job
+from importlib import import_module
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .client import OutputNotFoundException
+    from .destination import url_to_destination_params
+    from .exceptions import PulsarClientTransportError
+    from .manager import build_client_manager
+    from .path_mapper import PathMapper
+    from .staging import (
+        CLIENT_INPUT_PATH_TYPES,
+        ClientInput,
+        ClientInputs,
+        ClientJobDescription,
+        ClientOutputs,
+        EXTENDED_METADATA_DYNAMIC_COLLECTION_PATTERN,
+        PulsarOutputs,
+    )
+    from .staging.down import finish_job
+    from .staging.up import submit_job
+
+# Loaded on first access so importing one submodule (e.g. pulsar.client.constants)
+# doesn't pull in the job clients, client manager, and their cloud dependencies.
+_LAZY_EXPORTS = {
+    'CLIENT_INPUT_PATH_TYPES': '.staging',
+    'EXTENDED_METADATA_DYNAMIC_COLLECTION_PATTERN': '.staging',
+    'ClientInput': '.staging',
+    'ClientInputs': '.staging',
+    'ClientJobDescription': '.staging',
+    'ClientOutputs': '.staging',
+    'OutputNotFoundException': '.client',
+    'PathMapper': '.path_mapper',
+    'PulsarClientTransportError': '.exceptions',
+    'PulsarOutputs': '.staging',
+    'build_client_manager': '.manager',
+    'finish_job': '.staging.down',
+    'submit_job': '.staging.up',
+    'url_to_destination_params': '.destination',
+}
 
 __all__ = [
     'CLIENT_INPUT_PATH_TYPES',
@@ -72,3 +95,17 @@ __all__ = [
     'submit_job',
     'url_to_destination_params',
 ]
+
+
+def __getattr__(name):
+    try:
+        module_name = _LAZY_EXPORTS[name]
+    except KeyError:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from None
+    value = getattr(import_module(module_name, __name__), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__():
+    return sorted([*globals(), *__all__])

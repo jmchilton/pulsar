@@ -24,11 +24,9 @@ from ..action_mapper import (
     MessageAction,
     path_type,
 )
+from ..constants import COMMAND_VERSION_FILENAME
 from ..job_directory import RemoteJobDirectory
-from ..staging import (
-    CLIENT_INPUT_PATH_TYPES,
-    COMMAND_VERSION_FILENAME,
-)
+from ..staging import CLIENT_INPUT_PATH_TYPES
 from ..util import (
     directory_files,
     ExternalId,
