@@ -214,7 +214,7 @@ class Manager(BaseUnqueuedManager):
         self,
         job_id: str,
         command_line: str,
-        montior: MonitorStyle = MonitorStyle.BACKGROUND,
+        monitor: MonitorStyle = MonitorStyle.BACKGROUND,
     ) -> None:
         with self._get_job_lock(job_id):
             if self._was_cancelled(job_id):
@@ -223,7 +223,7 @@ class Manager(BaseUnqueuedManager):
         proc, stdout, stderr = self._proc_for_job_id(job_id, command_line)
         with self._get_job_lock(job_id):
             self._record_pid(job_id, proc.pid)
-        self._start_monitor(job_id, proc, stdout, stderr, montior=montior)
+        self._start_monitor(job_id, proc, stdout, stderr, monitor=monitor)
 
     def _proc_for_job_id(self, job_id: str, command_line: str) -> Tuple[Popen, IO, IO]:
         job_directory = self.job_directory(job_id)

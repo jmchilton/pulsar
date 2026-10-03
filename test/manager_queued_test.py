@@ -1,10 +1,16 @@
-# import os
-# import time
+import os
+import time
 
 from pulsar.managers.queued import QueueManager
+from .test_utils import (
+    BaseManagerTestCase,
+    wait_for,
+)
 
-# from .test_utils import BaseManagerTestCase, timed
-from .test_utils import BaseManagerTestCase
+WAIT_FOR_RELEASE_PROGRAM = """import os, time
+open(r'%s', 'w').close()
+list(iter(lambda: os.path.exists(r'%s') or time.sleep(0.05), True))
+"""
 
 CANCEL_TEST_PROGRAM = """import os
 open('%s', 'w').write(str(os.getpid()))
@@ -31,6 +37,22 @@ class PythonQueuedManagerTest(BaseManagerTestCase):
 
     def test_cancel_simple(self):
         self._test_cancelling(self.manager)
+
+    def test_num_concurrent_jobs_limits_running_jobs(self):
+        release = os.path.join(self.staging_directory, "release")
+        started1 = os.path.join(self.staging_directory, "started1")
+        started2 = os.path.join(self.staging_directory, "started2")
+        job1_id = self.manager.setup_job("124", "tool1", "1.0.0")
+        job2_id = self.manager.setup_job("125", "tool1", "1.0.0")
+        self.manager.launch(job1_id, self._python_to_command(WAIT_FOR_RELEASE_PROGRAM % (started1, release)))
+        self.manager.launch(job2_id, self._python_to_command(WAIT_FOR_RELEASE_PROGRAM % (started2, release)))
+        try:
+            wait_for(lambda: os.path.exists(started1), "the first job to start")
+            time.sleep(0.5)
+            assert not os.path.exists(started2), "second job started while the only slot was busy"
+        finally:
+            open(release, "w").close()
+        wait_for(lambda: os.path.exists(started2), "the second job to start once the first finished")
 
     # @timed(10)
     # def test_cancel_deeper(self):
