@@ -10,11 +10,16 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from dataclasses import (
     dataclass,
     field,
+)
+from http.server import (
+    BaseHTTPRequestHandler,
+    ThreadingHTTPServer,
 )
 from pathlib import Path
 from types import SimpleNamespace
@@ -551,54 +556,113 @@ def test_execution_records_cannot_be_adopted_by_another_token(execution):
         worker.run(execution.manifest)
 
 
-def test_entry_points_retry_callback_and_never_log_credentials(execution, monkeypatch):
-    callback = "http://galaxy.invalid/api/jobs/1/ports?job_key=private"
+PORT_INFO = {
+    "owned": {
+        "NetworkSettings": {
+            "Ports": {"8888/tcp": [{"HostIp": "127.0.0.1", "HostPort": "34567"}]}
+        }
+    }
+}
+
+
+class CallbackServer:
+    """Local HTTP endpoint answering with scripted statuses and recording requests."""
+
+    def __init__(self):
+        self.statuses = []
+        self.requests = []
+        recorder = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers["Content-Length"]))
+                recorder.requests.append(
+                    (self.command, self.path, self.headers["Content-Type"], json.loads(body))
+                )
+                self.send_response(recorder.statuses.pop(0))
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def url(self, path):
+        return f"http://127.0.0.1:{self.server.server_address[1]}{path}"
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+@pytest.fixture
+def callback_server():
+    server = CallbackServer()
+    yield server
+    server.close()
+
+
+def test_entry_points_retry_callback_and_never_persist_callback_in_live_record(
+    execution, callback_server
+):
+    callback_server.statuses = [503, 200]
+    callback = callback_server.url("/api/jobs/1/ports?job_key=private")
     execution.manifest["entry_point_config"] = {
         "container_name": "owned",
         "callback_url": callback,
     }
-    info = {
-        "owned": {
-            "NetworkSettings": {
-                "Ports": {"8888/tcp": [{"HostIp": "127.0.0.1", "HostPort": "34567"}]}
-            }
-        }
-    }
-    response = Mock()
-    response.__enter__ = Mock(return_value=SimpleNamespace(status=200))
-    response.__exit__ = Mock(return_value=False)
-    request = Mock(side_effect=[OSError("Galaxy unavailable"), response])
-    monkeypatch.setattr(worker.urlrequest, "urlopen", request)
     snapshot = {}
-    worker.publish_entry_points(execution.manifest, snapshot, info)
+    worker.publish_entry_points(execution.manifest, snapshot, PORT_INFO)
     assert not snapshot.get("entry_points_published")
-    worker.publish_entry_points(execution.manifest, snapshot, info)
+    worker.publish_entry_points(execution.manifest, snapshot, PORT_INFO)
     assert snapshot["entry_points_published"]
     assert snapshot["entry_point_ports"][8888]["port"] == 34567
     assert snapshot["entry_point_ports"][8888]["protocol"] == "http"
-    worker.publish_entry_points(execution.manifest, snapshot, info)
-    assert request.call_count == 2
-    assert "private" not in json.dumps(snapshot)
-
-
-@pytest.mark.parametrize("status", [403, 410])
-def test_revoked_entry_point_callback_is_not_retried(execution, monkeypatch, status):
-    execution.manifest["entry_point_config"] = {
-        "container_name": "owned",
-        "callback_url": "http://galaxy.invalid/ports",
-    }
-    info = {
-        "owned": {
-            "NetworkSettings": {
-                "Ports": {"80/tcp": [{"HostIp": "127.0.0.1", "HostPort": "10000"}]}
+    worker.publish_entry_points(execution.manifest, snapshot, PORT_INFO)
+    expected_body = {
+        "container_runtime": {
+            "8888": {
+                "tool_port": 8888,
+                "host": "127.0.0.1",
+                "port": 34567,
+                "protocol": "http",
             }
         }
     }
-    request = Mock(
-        side_effect=worker.urlerror.HTTPError("redacted", status, "revoked", None, None)
-    )
-    monkeypatch.setattr(worker.urlrequest, "urlopen", request)
+    assert callback_server.requests == [
+        ("POST", "/api/jobs/1/ports?job_key=private", "application/json", expected_body)
+    ] * 2
+    worker.atomic_json(execution.root / worker.LIVE_FILE, snapshot)
+    assert "private" not in (execution.root / worker.LIVE_FILE).read_text()
+
+
+def test_entry_point_callback_survives_unreachable_galaxy(execution, callback_server):
+    callback_server.statuses = [200]
+    callback = callback_server.url("/ports")
+    callback_server.close()
+    execution.manifest["entry_point_config"] = {
+        "container_name": "owned",
+        "callback_url": callback,
+    }
     snapshot = {}
-    worker.publish_entry_points(execution.manifest, snapshot, info)
-    worker.publish_entry_points(execution.manifest, snapshot, info)
-    assert snapshot["entry_points_revoked"] and request.call_count == 1
+    worker.publish_entry_points(execution.manifest, snapshot, PORT_INFO)
+    assert not snapshot.get("entry_points_published")
+    assert not snapshot.get("entry_points_revoked")
+
+
+@pytest.mark.parametrize("status", [403, 410])
+def test_revoked_entry_point_callback_is_not_retried(
+    execution, callback_server, status
+):
+    callback_server.statuses = [status]
+    execution.manifest["entry_point_config"] = {
+        "container_name": "owned",
+        "callback_url": callback_server.url("/ports"),
+    }
+    snapshot = {}
+    worker.publish_entry_points(execution.manifest, snapshot, PORT_INFO)
+    worker.publish_entry_points(execution.manifest, snapshot, PORT_INFO)
+    assert snapshot["entry_points_revoked"]
+    assert len(callback_server.requests) == 1
