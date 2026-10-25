@@ -222,13 +222,14 @@ class DetachedLocalManager(BaseUnqueuedManager):
                 with self._pool_lock():
                     self._confirm_cancelled_before_launch_locked(root, job_id)
                 return
+            configs = Path(self.job_directory(job_id).configs_directory())
             policy = worker.read_json(
-                root / "configs" / "detached_execution.json", {"schema": 1}
+                configs / "detached_execution.json", {"schema": 1}
             )
             if not isinstance(policy, dict) or policy.get("schema") != 1:
                 raise ValueError("Unsupported detached execution policy schema")
             container_configuration = worker.read_json(
-                root / "configs" / "container_config.json"
+                configs / "container_config.json"
             )
             script = self._prepare_run(
                 job_id,
