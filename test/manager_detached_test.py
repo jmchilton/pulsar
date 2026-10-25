@@ -3,19 +3,31 @@
 import json
 import os
 import shlex
+import shutil
 import signal
+import subprocess
 import sys
+import threading
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
 from pulsar.manager_factory import _get_managers_dict
-from pulsar.managers import status
+from pulsar.managers import (
+    ManagerProxy,
+    stateful,
+    status,
+)
 from pulsar.managers.detached import (
     ACK_FILE,
     CLEAN_FILE,
     concurrent_jobs,
     DetachedLocalManager,
+)
+from pulsar.managers.stateful import (
+    JOB_FILE_PREPROCESSED,
+    StatefulManagerProxy,
 )
 from pulsar.managers.util import detached_worker as worker
 from .test_utils import (
@@ -59,9 +71,30 @@ def managers():
             )
             manager.acknowledge_collection(job_id)
             manager.clean(job_id)
-    import shutil
-
     shutil.rmtree(app.staging_directory, ignore_errors=True)
+
+
+@dataclass
+class StagingOnlyApp:
+    staging_directory: str
+
+
+class BlockingPrepare:
+    """Wrap ``_prepare_run`` so a test can hold preparation open."""
+
+    def __init__(self, manager, only_job_id=None):
+        self._prepare = manager._prepare_run
+        self._only_job_id = only_job_id
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self.calls = []
+
+    def __call__(self, job_id, *args, **kwargs):
+        if self._only_job_id is None or job_id == self._only_job_id:
+            self.calls.append(job_id)
+            self.entered.set()
+            assert self.release.wait(10)
+        return self._prepare(job_id, *args, **kwargs)
 
 
 def launch(manager, code, job_id="galaxy-job", policy=None):
@@ -108,12 +141,10 @@ def test_cpu_capacity(monkeypatch):
     "raw", [-1, "-2", True, False, 1.1, "1.1", "", [], {}, float("nan")]
 )
 def test_invalid_capacity_before_side_effects(raw, tmp_path):
-    class App:
-        staging_directory = str(tmp_path / "must-not-be-created")
-
+    app = StagingOnlyApp(str(tmp_path / "must-not-be-created"))
     with pytest.raises(ValueError, match="num_concurrent_jobs"):
-        DetachedLocalManager("invalid", App(), num_concurrent_jobs=raw)
-    assert not Path(App.staging_directory).exists()
+        DetachedLocalManager("invalid", app, num_concurrent_jobs=raw)
+    assert not Path(app.staging_directory).exists()
 
 
 @pytest.mark.parametrize(
@@ -127,12 +158,10 @@ def test_invalid_capacity_before_side_effects(raw, tmp_path):
     ],
 )
 def test_invalid_timing_before_side_effects(setting, value, tmp_path):
-    class App:
-        staging_directory = str(tmp_path / "must-not-be-created")
-
+    app = StagingOnlyApp(str(tmp_path / "must-not-be-created"))
     with pytest.raises(ValueError):
-        DetachedLocalManager("invalid", App(), **{setting: value})
-    assert not Path(App.staging_directory).exists()
+        DetachedLocalManager("invalid", app, **{setting: value})
+    assert not Path(app.staging_directory).exists()
 
 
 def test_native_factory_and_capability(managers):
@@ -444,8 +473,6 @@ def test_unconfirmed_terminal_record_cannot_release_capacity_or_delete(managers)
 
 
 def test_pool_capacity_coordinates_independent_server_processes(managers):
-    import subprocess
-
     manager = managers(num_concurrent_jobs=1)
     blocker, blocker_root = launch(
         manager,
@@ -536,25 +563,14 @@ def test_unknown_supervisor_state_cannot_authorize_launch(managers, monkeypatch)
 def test_slow_preparation_does_not_block_unrelated_pool_operations(
     managers, monkeypatch
 ):
-    import threading
-
     manager = managers(num_concurrent_jobs=2)
     running, running_root = launch(manager, "import time; time.sleep(30)")
     started(running_root)
     slow = manager.setup_job("slow-preparation", "ordinary_tool", "1")
-    prepare_entered = threading.Event()
-    release_prepare = threading.Event()
     unrelated_done = threading.Event()
     errors = []
-    original_prepare = manager._prepare_run
-
-    def prepare(job_id, *args, **kwargs):
-        if job_id == slow:
-            prepare_entered.set()
-            assert release_prepare.wait(10)
-        return original_prepare(job_id, *args, **kwargs)
-
-    monkeypatch.setattr(manager, "_prepare_run", prepare)
+    blocking = BlockingPrepare(manager, only_job_id=slow)
+    monkeypatch.setattr(manager, "_prepare_run", blocking)
 
     def submit_slow():
         try:
@@ -575,13 +591,13 @@ def test_slow_preparation_does_not_block_unrelated_pool_operations(
     other_thread = threading.Thread(target=unrelated)
     slow_thread.start()
     try:
-        assert prepare_entered.wait(3)
+        assert blocking.entered.wait(3)
         other_thread.start()
         assert unrelated_done.wait(
             3
         ), "Slow dependency preparation held the shared pool lock"
     finally:
-        release_prepare.set()
+        blocking.release.set()
         slow_thread.join(10)
         if other_thread.ident:
             other_thread.join(10)
@@ -594,24 +610,12 @@ def test_slow_preparation_does_not_block_unrelated_pool_operations(
 def test_concurrent_duplicate_submissions_prepare_and_execute_once(
     managers, monkeypatch
 ):
-    import threading
-
     manager = managers()
     job_id = manager.setup_job("same-attempt", "ordinary_tool", "1")
     root = Path(manager.job_directory(job_id).job_directory)
-    entered = threading.Event()
-    release = threading.Event()
-    preparations = []
     errors = []
-    original_prepare = manager._prepare_run
-
-    def prepare(*args, **kwargs):
-        preparations.append(args[0])
-        entered.set()
-        assert release.wait(10)
-        return original_prepare(*args, **kwargs)
-
-    monkeypatch.setattr(manager, "_prepare_run", prepare)
+    blocking = BlockingPrepare(manager)
+    monkeypatch.setattr(manager, "_prepare_run", blocking)
 
     def submit():
         try:
@@ -623,26 +627,20 @@ def test_concurrent_duplicate_submissions_prepare_and_execute_once(
     second = threading.Thread(target=submit)
     first.start()
     try:
-        assert entered.wait(3)
+        assert blocking.entered.wait(3)
         second.start()
     finally:
-        release.set()
+        blocking.release.set()
         first.join(10)
         if second.ident:
             second.join(10)
     assert errors == []
-    assert preparations == [job_id]
+    assert blocking.calls == [job_id]
     completed(manager, job_id)
     assert (root / "working" / "count").read_text() == "x"
 
 
 def test_stateful_proxy_stop_before_launch_has_terminal_no_command_proof(managers):
-    from pulsar.managers import ManagerProxy
-    from pulsar.managers.stateful import (
-        JOB_FILE_PREPROCESSED,
-        StatefulManagerProxy,
-    )
-
     manager = managers()
     proxy = StatefulManagerProxy(manager)
     job_id = proxy.setup_job("stop-before-submit", "ordinary_tool", "1")
@@ -669,11 +667,6 @@ def test_stateful_proxy_stop_before_launch_has_terminal_no_command_proof(manager
 
 
 def test_stateful_proxy_stop_waits_for_preprocessing_writers(managers, monkeypatch):
-    import threading
-
-    from pulsar.managers import stateful
-    from pulsar.managers.stateful import StatefulManagerProxy
-
     manager = managers()
     proxy = StatefulManagerProxy(manager)
     job_id = proxy.setup_job("stop-during-copy", "ordinary_tool", "1")
@@ -714,36 +707,24 @@ def test_stateful_proxy_stop_waits_for_preprocessing_writers(managers, monkeypat
 def test_stateful_proxy_stop_during_command_preparation_never_launches(
     managers, monkeypatch
 ):
-    import threading
-
-    from pulsar.managers.stateful import StatefulManagerProxy
-
     manager = managers()
     proxy = StatefulManagerProxy(manager)
     job_id = proxy.setup_job("stop-during-prepare", "ordinary_tool", "1")
     root = Path(proxy.job_directory(job_id).job_directory)
-    entered = threading.Event()
-    release = threading.Event()
-    original_prepare = manager._prepare_run
-
-    def slow_prepare(*args, **kwargs):
-        entered.set()
-        assert release.wait(10)
-        return original_prepare(*args, **kwargs)
-
-    monkeypatch.setattr(manager, "_prepare_run", slow_prepare)
+    blocking = BlockingPrepare(manager)
+    monkeypatch.setattr(manager, "_prepare_run", blocking)
     thread = threading.Thread(
         target=proxy.preprocess_and_launch,
         args=(job_id, {"command_line": "touch must-not-run"}),
     )
     thread.start()
     try:
-        assert entered.wait(3)
+        assert blocking.entered.wait(3)
         proxy.kill(job_id)
         assert proxy.get_status(job_id) == status.PREPROCESSING
         assert not (root / worker.RESULT_FILE).exists()
     finally:
-        release.set()
+        blocking.release.set()
         thread.join(10)
     assert not thread.is_alive()
     assert proxy.get_status(job_id) == status.CANCELLED
@@ -752,8 +733,6 @@ def test_stateful_proxy_stop_during_command_preparation_never_launches(
 
 
 def test_stateful_proxy_recovers_durable_cancel_before_its_preprocessed_flag(managers):
-    from pulsar.managers.stateful import StatefulManagerProxy
-
     manager = managers()
     proxy = StatefulManagerProxy(manager)
     job_id = proxy.setup_job("crash-after-cancel-proof", "ordinary_tool", "1")
@@ -771,8 +750,6 @@ def test_stateful_proxy_recovers_durable_cancel_before_its_preprocessed_flag(man
 def test_proxy_terminal_cancel_poll_cannot_reactivate_active_index(
     managers, monkeypatch, cancel_before_prepare
 ):
-    from pulsar.managers.stateful import StatefulManagerProxy
-
     manager = managers()
     proxy = StatefulManagerProxy(manager)
     job_id = proxy.setup_job("cancel-index-race", "ordinary_tool", "1")
