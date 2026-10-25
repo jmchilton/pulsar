@@ -20,6 +20,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from pulsar.managers import status
+from pulsar.managers.stateful import JOB_FILE_PREPROCESSING_FAILED
 from pulsar.managers.unqueued import (
     Manager,
     new_clean_env,
@@ -507,6 +508,12 @@ class DetachedLocalManager(Manager):
                 return
             manifest = self._read_manifest(root)
             if manifest is None:
+                # No command was accepted; a recorded staging failure proves
+                # no preparation writer remains.
+                if self._job_directory(job_id).has_metadata(
+                    JOB_FILE_PREPROCESSING_FAILED
+                ):
+                    super().clean(job_id)
                 return
             worker.atomic_json(root / CLEAN_FILE, self._base_record(manifest))
             self._maybe_clean_locked(root, manifest)
