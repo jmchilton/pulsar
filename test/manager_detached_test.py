@@ -689,6 +689,30 @@ def test_stateful_proxy_stop_before_launch_has_terminal_no_command_proof(manager
     assert not root.exists()
 
 
+def test_stateful_proxy_preprocessing_failure_is_cleaned(managers, monkeypatch):
+    manager = managers()
+    proxy = StatefulManagerProxy(manager)
+    job_id = proxy.setup_job("failed-staging", "ordinary_tool", "1")
+    root = Path(proxy.job_directory(job_id).job_directory)
+
+    def failing_preprocess(*args, **kwargs):
+        raise OSError("simulated staging failure")
+
+    monkeypatch.setattr(stateful, "preprocess", failing_preprocess)
+    proxy.preprocess_and_launch(
+        job_id,
+        {"command_line": "touch must-not-run", "remote_staging": {"setup": [{}]}},
+    )
+    wait_for(
+        lambda: proxy.get_status(job_id),
+        "preprocessing failure",
+        until=lambda value: value == status.FAILED,
+    )
+    assert not (root / worker.MANIFEST_FILE).exists()
+    proxy.clean(job_id)
+    assert not root.exists()
+
+
 def test_stateful_proxy_stop_waits_for_preprocessing_writers(managers, monkeypatch):
     manager = managers()
     proxy = StatefulManagerProxy(manager)
