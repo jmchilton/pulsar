@@ -296,6 +296,11 @@ class DetachedLocalManager(Manager):
         with self._preparation_lock(root):
             with self._pool_lock():
                 self._confirm_cancelled_before_launch_locked(root, job_id)
+        return True
+
+    def cancelled_before_launch_confirmed(self, job_id):
+        # CANCELLED requires a terminal result, never merely a stop request.
+        return self.get_status(job_id) == status.CANCELLED
 
     def _confirm_cancelled_before_launch_locked(self, root, job_id):
         if not self._was_cancelled(job_id):

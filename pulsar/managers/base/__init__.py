@@ -139,6 +139,14 @@ class BaseManager(ManagerInterface, ABC):
             except Exception:
                 pass
 
+    def confirm_cancelled_before_launch(self, job_id: str) -> bool:
+        """Record that a cancelled, never-launched job is terminal; True if supported."""
+        return False
+
+    def cancelled_before_launch_confirmed(self, job_id: str) -> bool:
+        """True when durable proof exists that a cancelled job never launched."""
+        return False
+
     def system_properties(self) -> Dict[str, Any]:
         return self.__system_properties
 
