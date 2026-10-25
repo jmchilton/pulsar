@@ -29,7 +29,9 @@ from pulsar.managers.stateful import (
     JOB_FILE_PREPROCESSED,
     StatefulManagerProxy,
 )
+from pulsar.managers.unqueued import Manager as UnqueuedManager
 from pulsar.managers.util import detached_worker as worker
+from pulsar.web import routes
 from .test_utils import (
     minimal_app_for_managers,
     wait_for,
@@ -173,6 +175,17 @@ def test_native_factory_and_capability(managers):
         "collection_ack": True,
         "execution_policy": True,
     }
+
+
+def test_collection_route_is_safe_for_managers_without_retention():
+    app = minimal_app_for_managers()
+    manager = ManagerProxy(UnqueuedManager("plain", app))
+    job_id = manager.setup_job("plain-job", "ordinary_tool", "1")
+    assert routes.acknowledge_collection.func(manager, job_id) == {
+        "acknowledged": True
+    }
+    manager.clean(job_id)
+    shutil.rmtree(app.staging_directory, ignore_errors=True)
 
 
 def test_native_staging_streams_environment_and_exit_code(managers):

@@ -139,6 +139,10 @@ class BaseManager(ManagerInterface, ABC):
             except Exception:
                 pass
 
+    def acknowledge_collection(self, job_id: str) -> bool:
+        """Nothing is retained for collection beyond clean()."""
+        return True
+
     def confirm_cancelled_before_launch(self, job_id: str) -> bool:
         """Record that a cancelled, never-launched job is terminal; True if supported."""
         return False

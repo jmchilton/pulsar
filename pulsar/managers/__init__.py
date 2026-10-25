@@ -106,6 +106,12 @@ class ManagerInterface:
         End or cancel execution of the specified job.
         """
 
+    @abstractmethod
+    def acknowledge_collection(self, job_id: str) -> bool:
+        """
+        Confirm the client imported this job's outputs; True once nothing awaits collection.
+        """
+
     # TODO return type? Is this implemented anywhere, should be or? Found it only in ManagerProxy
     @abstractmethod
     def job_directory(self, job_id: str):
