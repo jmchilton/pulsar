@@ -190,6 +190,45 @@ def test_cancel_terminates_verified_group(execution):
     assert worker.command_group_status(identity)[1] is False
 
 
+@pytest.mark.parametrize("supervisor_replaced", [False, True])
+def test_stop_escalates_to_sigkill_with_stable_return_code(
+    execution, supervisor_replaced
+):
+    execution.prepare("trap '' TERM; touch trapped; sleep 30\n")
+    original = execution.launch()
+    identity = wait_for(
+        lambda: command(execution).get("phase") == "executing"
+        and command(execution)["command_identity"]
+    )
+    wait_for(lambda: (execution.root / "trapped").exists())
+    if supervisor_replaced:
+        original.kill()
+        original.wait(timeout=10)
+        replacement = execution.launch(recover=True)
+        wait_for(
+            lambda: worker.read_json(execution.root / worker.LIVE_FILE, {})
+            .get("worker_identity", {})
+            .get("pid")
+            == replacement.pid
+        )
+    stop(execution)
+    record = wait_for(lambda: result(execution))
+    assert record["stopped"] is True
+    assert record["return_code"] == 137
+    assert worker.command_group_status(identity)[1] is False
+
+
+def test_signalled_command_records_shell_style_return_code(execution):
+    execution.prepare("touch started; sleep 30\n")
+    execution.launch()
+    wait_for(lambda: (execution.root / "started").exists())
+    stop(execution)
+    record = wait_for(lambda: result(execution))
+    assert record["stopped"] is True
+    assert worker.read_json(execution.root / worker.EXIT_FILE)["return_code"] == 143
+    assert record["return_code"] == 143
+
+
 def test_background_writers_are_drained_before_result(execution):
     execution.prepare("(trap '' TERM; sleep 30) &\necho $! > writer; sleep 0.1\n")
     execution.launch()
