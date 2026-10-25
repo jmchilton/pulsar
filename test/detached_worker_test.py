@@ -23,8 +23,6 @@ from http.server import (
     ThreadingHTTPServer,
 )
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import Mock
 
 import pytest
 
@@ -393,25 +391,77 @@ def test_pid_reuse_does_not_authorize_process_group_signalling(monkeypatch):
     assert worker.command_group_status(identity)[1] is None
 
 
-def docker_response(**changes):
+FAKE_DOCKER = """#!{python}
+import json, sys
+from pathlib import Path
+directory = Path(__file__).parent
+with (directory / "docker.log").open("a") as log:
+    log.write(json.dumps(sys.argv[1:]) + "\\n")
+state = json.loads((directory / "state.json").read_text())
+command = sys.argv[1]
+if state.get("error"):
+    sys.stderr.write(state["error"])
+    sys.exit(1)
+if state.get("info") is None:
+    sys.stderr.write("Error: No such object: " + sys.argv[-1])
+    sys.exit(1)
+if command == "inspect":
+    print(json.dumps(state["info"]))
+elif command == "kill" and not ("--signal" in sys.argv and state.get("ignore_term")):
+    state["info"]["State"] = {{"Running": False, "Status": "exited"}}
+elif command == "rm":
+    state["info"] = None
+(directory / "state.json").write_text(json.dumps(state))
+"""
+
+
+class FakeDocker:
+    """Executable ``docker_cmd`` serving scripted inspect data and logging argv."""
+
+    def __init__(self, directory):
+        directory.mkdir()
+        self.directory = directory
+        self.command = directory / "docker"
+        self.command.write_text(FAKE_DOCKER.format(python=sys.executable))
+        self.command.chmod(0o700)
+        self.configuration = {"docker_cmd": str(self.command)}
+        self.set()
+
+    def set(self, info=None, error=None, ignore_term=False):
+        state = {"info": info, "error": error, "ignore_term": ignore_term}
+        (self.directory / "state.json").write_text(json.dumps(state))
+
+    def calls(self):
+        log = self.directory / "docker.log"
+        return [json.loads(line) for line in log.read_text().splitlines()]
+
+
+@pytest.fixture
+def fake_docker(tmp_path):
+    return FakeDocker(tmp_path / "fake-docker")
+
+
+def container_info(mount="/jobs/1", **changes):
     info = {
         "Id": "immutable-owned-id",
         "Name": "/owned",
-        "Mounts": [{"Source": "/jobs/1", "Destination": "/jobs/1", "RW": False}],
+        "Mounts": [{"Source": mount, "Destination": mount, "RW": False}],
         "State": {"Running": True, "Status": "running"},
     }
     info.update(changes)
-    return SimpleNamespace(returncode=0, stdout=json.dumps(info), stderr="")
+    return info
 
 
 @pytest.mark.parametrize("state", ["running", "created", "exited", "dead"])
-def test_docker_verified_identity_and_mount(monkeypatch, state):
-    response = docker_response(State={"Running": state == "running", "Status": state})
-    monkeypatch.setattr(worker, "call_docker", Mock(return_value=response))
+def test_docker_verified_identity_and_mount(fake_docker, state):
+    fake_docker.set(
+        container_info(State={"Running": state == "running", "Status": state})
+    )
     observed, identity, info = worker.inspect_container(
-        {}, "owned", expected_mount="/jobs/1"
+        fake_docker.configuration, "owned", expected_mount="/jobs/1"
     )
     assert observed == state and identity == "immutable-owned-id" and info
+    assert fake_docker.calls() == [["inspect", "--format", "{{json .}}", "owned"]]
 
 
 @pytest.mark.parametrize(
@@ -424,86 +474,69 @@ def test_docker_verified_identity_and_mount(monkeypatch, state):
         {"State": {"Status": "removing"}},
     ],
 )
-def test_docker_changed_identity_or_mount_is_unknown(monkeypatch, changes):
-    monkeypatch.setattr(
-        worker, "call_docker", Mock(return_value=docker_response(**changes))
-    )
+def test_docker_changed_identity_or_mount_is_unknown(fake_docker, changes):
+    fake_docker.set(container_info(**changes))
     state, identity, _ = worker.inspect_container(
-        {}, "owned", "immutable-owned-id", "/jobs/1"
+        fake_docker.configuration, "owned", "immutable-owned-id", "/jobs/1"
     )
     assert state == "unknown" and identity == "immutable-owned-id"
 
 
 @pytest.mark.parametrize(
-    "message,expected",
+    "error,expected",
     [
+        (None, "absent"),
         ("No such container: owned", "absent"),
         ("Cannot connect to Docker daemon", "unknown"),
         ("permission denied", "unknown"),
     ],
 )
-def test_docker_absence_differs_from_daemon_failure(monkeypatch, message, expected):
-    monkeypatch.setattr(
-        worker,
-        "call_docker",
-        Mock(return_value=SimpleNamespace(returncode=1, stdout="", stderr=message)),
-    )
+def test_docker_absence_differs_from_daemon_failure(fake_docker, error, expected):
+    fake_docker.set(error=error)
     assert (
-        worker.inspect_container({}, "owned", "immutable-owned-id", "/jobs/1")[0]
+        worker.inspect_container(
+            fake_docker.configuration, "owned", "immutable-owned-id", "/jobs/1"
+        )[0]
         == expected
     )
 
 
-def test_owned_daemon_container_stops_after_wrapper_exits(execution, monkeypatch):
+def test_owned_daemon_container_stops_after_wrapper_exits(execution, fake_docker):
     execution.prepare("true\n")
     execution.manifest["containers"] = [
         {
             "container_type": "docker",
             "container_name": "owned",
-            "connection_configuration": {},
+            "connection_configuration": fake_docker.configuration,
             "expected_mount": str(execution.root),
             "role": "tool",
         }
     ]
-    state = {"value": "running"}
-    actions = []
-    monkeypatch.setattr(
-        worker,
-        "inspect_container",
-        lambda *args: (state["value"], "immutable-owned-id", None),
-    )
-
-    def call(configuration, *arguments, **kwds):
-        actions.append(arguments)
-        state["value"] = "exited"
-        return SimpleNamespace(returncode=0)
-
-    monkeypatch.setattr(worker, "call_docker", call)
+    # Ignoring TERM forces escalation to a plain kill after the grace period.
+    fake_docker.set(container_info(mount=str(execution.root)), ignore_term=True)
     assert worker.run(execution.manifest) == 0
-    assert actions and all(action[-1] == "immutable-owned-id" for action in actions)
+    actions = [call for call in fake_docker.calls() if call[0] != "inspect"]
+    assert actions == [
+        ["kill", "--signal", "TERM", "immutable-owned-id"],
+        ["kill", "immutable-owned-id"],
+    ]
     assert execution.result()["container_exit_confirmed"]
     assert execution.result()["container_identities"] == {"owned": "immutable-owned-id"}
 
 
-def test_unknown_container_never_authorizes_result(execution, monkeypatch):
+def test_unknown_container_never_authorizes_result(execution, fake_docker):
     execution.manifest["containers"] = [
         {
             "container_type": "docker",
             "container_name": "owned",
-            "connection_configuration": {},
+            "connection_configuration": fake_docker.configuration,
             "expected_mount": str(execution.root),
         }
     ]
+    execution.prepare()
+    fake_docker.set(error="Cannot connect to the Docker daemon")
     execution.stop()
-    monkeypatch.setattr(
-        worker, "inspect_container", lambda *args: ("unknown", None, None)
-    )
-    monkeypatch.setattr(
-        worker.time, "sleep", Mock(side_effect=RuntimeError("end inspection"))
-    )
-    # No process has started, but an inaccessible daemon still blocks terminal proof.
-    # A cancellation before any launch is safe because no container could exist.
-    # Force an existing, finished command to exercise the uncertain-daemon case.
+    # A finished command with an unreachable daemon: container exit is unproven.
     identity = {"pid": 99999999, "creation_time": 0}
     for name, fields in (
         (worker.COMMAND_FILE, {"command_identity": identity}),
@@ -511,15 +544,14 @@ def test_unknown_container_never_authorizes_result(execution, monkeypatch):
     ):
         worker.atomic_json(
             execution.root / name,
-            {
-                "job_id": execution.manifest["job_id"],
-                "token": execution.manifest["token"],
-                **fields,
-            },
+            {**worker._base_record(execution.manifest), **fields},
         )
-    with pytest.raises(RuntimeError, match="end inspection"):
-        worker.run(execution.manifest, recover=True)
+    execution.launch(recover=True)
+    wait_for(lambda: execution.live().get("phase") == "retained", "retained phase")
+    time.sleep(0.1)
     assert not execution.result()
+    assert fake_docker.calls()
+    assert all(call[0] == "inspect" for call in fake_docker.calls())
 
 
 def test_output_count_ignores_symlinks_and_counts_hardlinks_once(tmp_path):
