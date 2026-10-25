@@ -77,13 +77,14 @@ class TestClient(JobClient):
 class RequestChecker:
     """ Class that tests request objects produced by the Client class.
     """
-    def __init__(self, action, args=None, data=None):
+    def __init__(self, action, args=None, data=None, method=None):
         if args is None:
             args = {}
         args['job_id'] = "543"
         self.action = action
         self.expected_args = args
         self.data = data
+        self.method = method
         self.called = False
 
     def check_url(self, opened_url):
@@ -107,6 +108,8 @@ class RequestChecker:
         self.called = True
         self.check_url(request.get_full_url())
         self.check_data(data)
+        if self.method:
+            assert request.get_method() == self.method
 
     def assert_called(self):
         assert self.called
@@ -213,6 +216,14 @@ def test_clean():
     request_checker = RequestChecker("jobs/543")
     client.expect_open(request_checker, 'OK')
     client.clean()
+    request_checker.assert_called()
+
+
+def test_acknowledge_collection():
+    client = TestClient()
+    request_checker = RequestChecker("jobs/543/collection", method="PUT")
+    client.expect_open(request_checker, b'{"acknowledged": true}')
+    assert client.acknowledge_collection() == {"acknowledged": True}
     request_checker.assert_called()
 
 

@@ -322,6 +322,7 @@ def run(options):
             __finish(options, client, client_outputs, result_status)
         else:
             client.clean()
+        __acknowledge_collection(options, client)
         __assert_contents(temp_output_path, EXPECTED_OUTPUT, result_status)
         __assert_contents(temp_output2_path, cmd_text, result_status)
         if not legacy_galaxy_json:
@@ -574,6 +575,16 @@ def __extra_job_description_kwargs(options):
     if getattr(options, "explicit_tool_declarations", False):
         rval["tool_directory_required_files"] = TestRequiredFilesObject()
     return rval
+
+
+def __acknowledge_collection(options, client):
+    """Collection-ack managers retain staging after clean until acknowledged."""
+    if not getattr(options, "acknowledge_collection", False):
+        return
+    job_directory = os.path.join(options.staging_directory, client.job_id)
+    assert os.path.exists(job_directory), "Staging removed before collection acknowledgment"
+    assert client.acknowledge_collection() == {"acknowledged": True}
+    assert not os.path.exists(job_directory), "Staging retained after collection acknowledgment"
 
 
 def __finish(options, client, client_outputs, result_status):

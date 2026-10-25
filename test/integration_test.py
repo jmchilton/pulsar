@@ -428,6 +428,16 @@ def test_integration_remote_transfer(direct_test_configuration: IntegrationTestC
     )
 
 
+@integration_test
+def test_integration_detached_local(integration_test_configuration: IntegrationTestConfiguration):
+    run_job(
+        integration_test_configuration,
+        job_conf_props={"type": "detached_local", "poll_interval": "0.05", "assign_ids": "galaxy"},
+        private_token=None,
+        acknowledge_collection=True,
+    )
+
+
 def run_job(test_configuration: IntegrationTestConfiguration, job_conf_props: Optional[Dict[str, str]] = None, **kwds):
     if "suppress_output" not in kwds:
         kwds["suppress_output"] = False
@@ -477,6 +487,8 @@ def _run_direct(test_configuration, **kwds):
 
 
 def _update_options_for_app(options, app, **kwds):
+    if kwds.get("acknowledge_collection", False):
+        options["staging_directory"] = app.staging_directory
     if kwds.get("local_setup", False):
         staging_directory = app.staging_directory
         is_coexecution = kwds.get("k8s_enabled") or kwds.get("tes_url")
