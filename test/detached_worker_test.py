@@ -97,6 +97,16 @@ class DetachedExecution:
             )
 
 
+class Recorder:
+    """Record calls to a replaced signalling function."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, *args):
+        self.calls.append(args)
+
+
 @pytest.fixture
 def execution(tmp_path):
     manifest = {
@@ -342,22 +352,23 @@ def test_unstarted_manager_reservation_can_launch_on_recovery(execution):
 def test_host_boot_mismatch_neither_executes_nor_signals(execution, monkeypatch):
     execution.manifest["host_identity"]["boot_id"] = "other-boot"
     execution.prepare("touch should-not-exist\n")
-    signal_mock = Mock()
-    monkeypatch.setattr(worker, "signal_command", signal_mock)
+    signals = Recorder()
+    monkeypatch.setattr(worker, "signal_command", signals)
     assert worker.run(execution.manifest, recover=True) == 0
     assert not execution.result()
-    assert not signal_mock.called
+    assert signals.calls == []
     assert not (execution.root / "should-not-exist").exists()
     assert worker.read_json(execution.root / worker.LIVE_FILE)["phase"] == "retained"
 
 
 def test_pid_reuse_does_not_authorize_process_group_signalling(monkeypatch):
     identity = {"pid": os.getpid(), "creation_time": 0}
-    signal_mock = Mock()
-    monkeypatch.setattr(os, "killpg", signal_mock)
+    # Guard pytest's own process group should the identity check regress.
+    killpg = Recorder()
+    monkeypatch.setattr(os, "killpg", killpg)
     assert worker.identity_alive(identity) is False
     worker.signal_command(identity, signal.SIGTERM)
-    assert not signal_mock.called
+    assert killpg.calls == []
     assert worker.command_group_status(identity)[1] is None
 
 
