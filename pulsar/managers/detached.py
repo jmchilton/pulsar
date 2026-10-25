@@ -22,7 +22,7 @@ from pathlib import Path
 from pulsar.managers import status
 from pulsar.managers.stateful import JOB_FILE_PREPROCESSING_FAILED
 from pulsar.managers.unqueued import (
-    Manager,
+    BaseUnqueuedManager,
     new_clean_env,
 )
 from pulsar.managers.util import detached_worker as worker
@@ -68,7 +68,7 @@ def _seconds(value, name, allow_zero=False):
     return result
 
 
-class DetachedLocalManager(Manager):
+class DetachedLocalManager(BaseUnqueuedManager):
     """Native Pulsar commands supervised outside the server process session.
 
     All managers using one staging directory form one FIFO capacity pool.
@@ -438,6 +438,9 @@ class DetachedLocalManager(Manager):
             except Exception:
                 # The durable reservation remains and is retried on recovery.
                 log.exception("Unable to start detached supervisor at %s", root)
+
+    def _monitor_execution(self, *args, **kwargs):
+        raise NotImplementedError("Detached workers, not the manager, monitor execution")
 
     def _housekeep(self):
         while not self._shutdown.wait(self.poll_interval):
