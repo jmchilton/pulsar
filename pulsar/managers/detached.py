@@ -259,7 +259,7 @@ class DetachedLocalManager(BaseUnqueuedManager):
                     )
                 worker.atomic_json(root / worker.MANIFEST_FILE, manifest)
                 if cancelled:
-                    self._cancel_queued(root, manifest)
+                    self._request_stop_locked(root, manifest)
                 self._reconcile_locked()
 
     def _new_manifest(self, root, job_id, script, policy=None):
@@ -309,19 +309,22 @@ class DetachedLocalManager(BaseUnqueuedManager):
         if manifest is None:
             manifest = self._new_manifest(root, job_id, root / "command.sh")
             manifest["cancelled_before_launch"] = True
+            # Stop precedes the manifest so no crash leaves it eligible to start.
             worker.atomic_json(root / worker.STOP_FILE, self._base_record(manifest))
             worker.atomic_json(root / worker.MANIFEST_FILE, manifest)
-        else:
-            worker.atomic_json(root / worker.STOP_FILE, self._base_record(manifest))
+        self._request_stop_locked(root, manifest)
+        self._reconcile_locked()
+
+    def _request_stop_locked(self, root, manifest):
+        """Record Stop; a queued local attempt is settled as cancelled at once."""
+        worker.atomic_json(root / worker.STOP_FILE, self._base_record(manifest))
         if (
-            manifest["phase"] == "queued"
+            manifest.get("phase") == "queued"
             and manifest["host_identity"] == worker.host_identity()
         ):
             self._cancel_queued(root, manifest)
-        self._reconcile_locked()
 
     def _cancel_queued(self, root, manifest):
-        worker.atomic_json(root / worker.STOP_FILE, self._base_record(manifest))
         worker.atomic_json(
             root / worker.RESULT_FILE,
             {
@@ -408,7 +411,7 @@ class DetachedLocalManager(BaseUnqueuedManager):
                     if self._record(
                         root, worker.STOP_FILE, manifest
                     ) or self._was_cancelled(manifest["job_id"]):
-                        self._cancel_queued(root, manifest)
+                        self._request_stop_locked(root, manifest)
                         self._maybe_clean_locked(root, manifest)
                     else:
                         queued.append(
@@ -488,12 +491,7 @@ class DetachedLocalManager(BaseUnqueuedManager):
             manifest = self._read_manifest(root)
             if manifest is None:
                 return
-            worker.atomic_json(root / worker.STOP_FILE, self._base_record(manifest))
-            if (
-                manifest.get("phase") == "queued"
-                and manifest["host_identity"] == worker.host_identity()
-            ):
-                self._cancel_queued(root, manifest)
+            self._request_stop_locked(root, manifest)
             self._reconcile_locked()
 
     def job_stderr_contents(self, job_id):
