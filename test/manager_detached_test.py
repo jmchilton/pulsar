@@ -188,7 +188,7 @@ def test_restart_adopts_same_command_without_reexecution(managers):
     assert worker.read_json(root / worker.RESULT_FILE)["command_identity"] == identity
 
 
-def test_capacity_shared_fifo_across_managers(managers):
+def test_capacity_shared_across_managers(managers):
     first = managers(num_concurrent_jobs=2)
     second = managers(num_concurrent_jobs=2)
     waiting = (
@@ -215,6 +215,36 @@ def test_capacity_shared_fifo_across_managers(managers):
     ]
     exits = [worker.read_json(root / worker.EXIT_FILE) for root in (root_one, root_two)]
     assert commands[2]["started_at"] >= min(record["finished_at"] for record in exits)
+
+
+# Remote IDs are random UUIDs; repeat so directory order differs from submission order.
+@pytest.mark.parametrize("repeat", range(3))
+def test_queued_jobs_start_in_submission_order(managers, repeat):
+    first = managers(num_concurrent_jobs=1)
+    second = managers(num_concurrent_jobs=1)
+    waiting = (
+        "from pathlib import Path; import time; "
+        "exec('while not Path(\"release\").exists(): time.sleep(.03)')"
+    )
+    blocker, blocker_root = launch(first, waiting)
+    started(blocker_root)
+    queued = [
+        launch(manager, "pass", job_id=name)
+        for manager, name in ((first, "submitted-first"), (second, "submitted-second"))
+    ]
+    (blocker_root / "working" / "release").touch()
+    completed(first, blocker)
+    for job_id, _ in queued:
+        completed(first, job_id)
+    (b_command, b_exit), (c_command, _) = (
+        (
+            worker.read_json(root / worker.COMMAND_FILE),
+            worker.read_json(root / worker.EXIT_FILE),
+        )
+        for _, root in queued
+    )
+    assert b_command["started_at"] < c_command["started_at"]
+    assert c_command["started_at"] >= b_exit["finished_at"]
 
 
 @pytest.mark.parametrize("capacity", [None, 0])
