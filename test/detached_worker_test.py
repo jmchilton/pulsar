@@ -12,6 +12,10 @@ import subprocess
 import sys
 import time
 import uuid
+from dataclasses import (
+    dataclass,
+    field,
+)
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -19,21 +23,82 @@ from unittest.mock import Mock
 import pytest
 
 from pulsar.managers.util import detached_worker as worker
+from .test_utils import wait_for
 
 
-def wait_for(function, timeout=10):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        result = function()
-        if result:
-            return result
-        time.sleep(0.02)
-    raise AssertionError("Detached worker did not reach expected state")
+@dataclass
+class DetachedExecution:
+    root: Path
+    manifest: dict
+    processes: list = field(default_factory=list)
+
+    def prepare(self, script="printf 'completed\\n'\n"):
+        script_path = Path(self.manifest["command_script"])
+        script_path.write_text("#!/bin/sh\n" + script)
+        script_path.chmod(0o700)
+        worker.atomic_json(self.root / worker.MANIFEST_FILE, self.manifest)
+
+    def launch(self, recover=False):
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                str(self.root / worker.WORKER_FILE),
+                str(self.root / worker.MANIFEST_FILE),
+            ]
+            + (["--recover"] if recover else []),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        self.processes.append(process)
+        return process
+
+    def result(self):
+        return worker.read_json(self.root / worker.RESULT_FILE)
+
+    def command(self):
+        return worker.read_json(self.root / worker.COMMAND_FILE, {})
+
+    def live(self):
+        return worker.read_json(self.root / worker.LIVE_FILE, {})
+
+    def stop(self, reason="cancelled"):
+        worker.atomic_json(
+            self.root / worker.STOP_FILE,
+            {**worker._base_record(self.manifest), "reason": reason},
+        )
+
+    def wait_for_result(self):
+        return wait_for(self.result, "detached result", timeout=10)
+
+    def wait_for_execution(self):
+        return wait_for(
+            lambda: self.command().get("phase") == "executing"
+            and self.command()["command_identity"],
+            "detached command execution",
+            timeout=10,
+        )
+
+    def wait_for_file(self, name):
+        wait_for(lambda: (self.root / name).exists(), name, timeout=10)
+
+    def kill_command_group(self):
+        for process in self.processes:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=10)
+            process.stderr.close()
+        identity = self.command().get("command_identity")
+        if identity:
+            worker.signal_command(
+                identity,
+                signal.SIGKILL,
+                self.live().get("command_members", [identity]),
+            )
 
 
 @pytest.fixture
 def execution(tmp_path):
-    processes = []
     manifest = {
         "schema": 1,
         "job_id": "example",
@@ -51,70 +116,16 @@ def execution(tmp_path):
         "limits": {},
     }
     shutil.copyfile(worker.__file__, tmp_path / worker.WORKER_FILE)
-
-    def prepare(script="printf 'completed\\n'\n"):
-        script_path = Path(manifest["command_script"])
-        script_path.write_text("#!/bin/sh\n" + script)
-        script_path.chmod(0o700)
-        worker.atomic_json(tmp_path / worker.MANIFEST_FILE, manifest)
-
-    def launch(recover=False):
-        process = subprocess.Popen(
-            [
-                sys.executable,
-                str(tmp_path / worker.WORKER_FILE),
-                str(tmp_path / worker.MANIFEST_FILE),
-            ]
-            + (["--recover"] if recover else []),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            start_new_session=True,
-        )
-        processes.append(process)
-        return process
-
-    prepare()
-    yield SimpleNamespace(
-        root=tmp_path, manifest=manifest, prepare=prepare, launch=launch
-    )
-    for process in processes:
-        if process.poll() is None:
-            process.kill()
-        process.wait(timeout=10)
-        process.stderr.close()
-    record = worker.read_json(tmp_path / worker.COMMAND_FILE, {})
-    identity = record.get("command_identity")
-    if identity:
-        snapshot = worker.read_json(tmp_path / worker.LIVE_FILE, {})
-        worker.signal_command(
-            identity, signal.SIGKILL, snapshot.get("command_members", [identity])
-        )
-
-
-def result(execution):
-    return worker.read_json(execution.root / worker.RESULT_FILE)
-
-
-def command(execution):
-    return worker.read_json(execution.root / worker.COMMAND_FILE, {})
-
-
-def stop(execution, reason="cancelled"):
-    worker.atomic_json(
-        execution.root / worker.STOP_FILE,
-        {
-            "schema": 1,
-            "job_id": execution.manifest["job_id"],
-            "token": execution.manifest["token"],
-            "reason": reason,
-        },
-    )
+    detached = DetachedExecution(tmp_path, manifest)
+    detached.prepare()
+    yield detached
+    detached.kill_command_group()
 
 
 def test_native_exit_and_private_durable_records(execution):
     execution.prepare("printf 'native output\\n'; printf 'error text\\n' >&2; exit 7\n")
     process = execution.launch()
-    record = wait_for(lambda: result(execution))
+    record = execution.wait_for_result()
     process.wait(timeout=10)
     assert record["return_code"] == record["returncode"] == 7
     assert record["command_exit_confirmed"] and record["container_exit_confirmed"]
@@ -135,10 +146,10 @@ def test_native_exit_and_private_durable_records(execution):
 def test_result_is_idempotent_and_duplicate_supervisor_cannot_replay(execution):
     execution.prepare("echo run >> launches; sleep 0.2\n")
     first = execution.launch()
-    wait_for(lambda: command(execution).get("phase") == "executing")
+    execution.wait_for_execution()
     duplicate = execution.launch(recover=True)
     duplicate.wait(timeout=10)
-    wait_for(lambda: result(execution))
+    execution.wait_for_result()
     first.wait(timeout=10)
     execution.launch(recover=True).wait(timeout=10)
     assert (execution.root / "launches").read_text().splitlines() == ["run"]
@@ -150,17 +161,14 @@ def test_supervisor_loss_reconnects_to_same_execution(
 ):
     execution.prepare("echo run >> launches; sleep 0.4; echo complete > output\n")
     original = execution.launch()
-    identity = wait_for(
-        lambda: command(execution).get("phase") == "executing"
-        and command(execution)["command_identity"]
-    )
-    wait_for(lambda: (execution.root / "launches").exists())
+    identity = execution.wait_for_execution()
+    execution.wait_for_file("launches")
     original.kill()
     original.wait(timeout=10)
     if finish_during_downtime:
-        wait_for(lambda: (execution.root / worker.EXIT_FILE).exists())
+        execution.wait_for_file(worker.EXIT_FILE)
     replacement = execution.launch(recover=True)
-    record = wait_for(lambda: result(execution))
+    record = execution.wait_for_result()
     replacement.wait(timeout=10)
     assert record["command_identity"] == identity
     assert record["return_code"] == 0
@@ -170,9 +178,9 @@ def test_supervisor_loss_reconnects_to_same_execution(
 
 def test_cancel_before_launch_does_not_execute(execution):
     execution.prepare("touch should-not-exist\n")
-    stop(execution)
+    execution.stop()
     execution.launch().wait(timeout=10)
-    assert result(execution)["stopped"] is True
+    assert execution.result()["stopped"] is True
     assert not (execution.root / "should-not-exist").exists()
     assert not (execution.root / worker.COMMAND_FILE).exists()
 
@@ -180,12 +188,9 @@ def test_cancel_before_launch_does_not_execute(execution):
 def test_cancel_terminates_verified_group(execution):
     execution.prepare("sleep 30\n")
     execution.launch()
-    identity = wait_for(
-        lambda: command(execution).get("phase") == "executing"
-        and command(execution)["command_identity"]
-    )
-    stop(execution)
-    record = wait_for(lambda: result(execution))
+    identity = execution.wait_for_execution()
+    execution.stop()
+    record = execution.wait_for_result()
     assert record["stopped"] and record["command_exit_confirmed"]
     assert worker.command_group_status(identity)[1] is False
 
@@ -196,23 +201,19 @@ def test_stop_escalates_to_sigkill_with_stable_return_code(
 ):
     execution.prepare("trap '' TERM; touch trapped; sleep 30\n")
     original = execution.launch()
-    identity = wait_for(
-        lambda: command(execution).get("phase") == "executing"
-        and command(execution)["command_identity"]
-    )
-    wait_for(lambda: (execution.root / "trapped").exists())
+    identity = execution.wait_for_execution()
+    execution.wait_for_file("trapped")
     if supervisor_replaced:
         original.kill()
         original.wait(timeout=10)
         replacement = execution.launch(recover=True)
         wait_for(
-            lambda: worker.read_json(execution.root / worker.LIVE_FILE, {})
-            .get("worker_identity", {})
-            .get("pid")
-            == replacement.pid
+            lambda: execution.live().get("worker_identity", {}).get("pid")
+            == replacement.pid,
+            "replacement supervisor",
         )
-    stop(execution)
-    record = wait_for(lambda: result(execution))
+    execution.stop()
+    record = execution.wait_for_result()
     assert record["stopped"] is True
     assert record["return_code"] == 137
     assert worker.command_group_status(identity)[1] is False
@@ -221,9 +222,9 @@ def test_stop_escalates_to_sigkill_with_stable_return_code(
 def test_signalled_command_records_shell_style_return_code(execution):
     execution.prepare("touch started; sleep 30\n")
     execution.launch()
-    wait_for(lambda: (execution.root / "started").exists())
-    stop(execution)
-    record = wait_for(lambda: result(execution))
+    execution.wait_for_file("started")
+    execution.stop()
+    record = execution.wait_for_result()
     assert record["stopped"] is True
     assert worker.read_json(execution.root / worker.EXIT_FILE)["return_code"] == 143
     assert record["return_code"] == 143
@@ -232,11 +233,11 @@ def test_signalled_command_records_shell_style_return_code(execution):
 def test_background_writers_are_drained_before_result(execution):
     execution.prepare("(trap '' TERM; sleep 30) &\necho $! > writer; sleep 0.1\n")
     execution.launch()
-    wait_for(lambda: (execution.root / "writer").exists())
+    execution.wait_for_file("writer")
     writer_identity = worker.process_identity(
         int((execution.root / "writer").read_text())
     )
-    wait_for(lambda: result(execution))
+    execution.wait_for_result()
     assert worker.identity_alive(writer_identity) is False
 
 
@@ -244,17 +245,17 @@ def test_walltime_survives_supervisor_replacement(execution):
     execution.manifest["limits"] = {"walltime_seconds": 0.3}
     execution.prepare("echo started > marker; sleep 30\n")
     process = execution.launch()
-    wait_for(lambda: (execution.root / "marker").exists())
-    started_at = command(execution)["started_at"]
+    execution.wait_for_file("marker")
+    started_at = execution.command()["started_at"]
     process.kill()
     process.wait(timeout=10)
     time.sleep(0.35)
     execution.launch(recover=True)
-    record = wait_for(lambda: result(execution))
+    record = execution.wait_for_result()
     assert record["stopped"]
     assert worker.read_json(execution.root / worker.STOP_FILE)["reason"] == "walltime"
     assert "walltime" in record["failure"]
-    assert command(execution)["started_at"] == started_at
+    assert execution.command()["started_at"] == started_at
 
 
 def test_output_limit_is_enforced_without_galaxy(execution):
@@ -265,7 +266,7 @@ def test_output_limit_is_enforced_without_galaxy(execution):
     }
     execution.prepare("printf 'a sufficiently large output' > output; sleep 30\n")
     execution.launch()
-    record = wait_for(lambda: result(execution))
+    record = execution.wait_for_result()
     assert record["stopped"]
     assert "output_size" in record["failure"]
 
@@ -277,7 +278,7 @@ def test_native_output_limit_is_per_file_not_total_job_output(execution):
     }
     execution.prepare("printf '123456' > first; printf '123456' > second; sleep 0.1\n")
     execution.launch()
-    record = wait_for(lambda: result(execution))
+    record = execution.wait_for_result()
     assert record["return_code"] == 0 and record["stopped"] is False
     assert not (execution.root / worker.STOP_FILE).exists()
 
@@ -323,11 +324,10 @@ def test_unknown_fork_window_never_replays(execution):
     )
     execution.launch(recover=True)
     wait_for(
-        lambda: worker.read_json(execution.root / worker.LIVE_FILE, {}).get("phase")
-        == "retained"
+        lambda: execution.live().get("phase") == "retained", "retained phase"
     )
     time.sleep(0.1)
-    assert not result(execution)
+    assert not execution.result()
     assert not (execution.root / "should-not-exist").exists()
 
 
@@ -335,7 +335,7 @@ def test_unstarted_manager_reservation_can_launch_on_recovery(execution):
     execution.manifest["phase"] = "launching"
     execution.prepare("echo single >> launches\n")
     execution.launch(recover=True).wait(timeout=10)
-    assert result(execution)["return_code"] == 0
+    assert execution.result()["return_code"] == 0
     assert (execution.root / "launches").read_text() == "single\n"
 
 
@@ -345,7 +345,7 @@ def test_host_boot_mismatch_neither_executes_nor_signals(execution, monkeypatch)
     signal_mock = Mock()
     monkeypatch.setattr(worker, "signal_command", signal_mock)
     assert worker.run(execution.manifest, recover=True) == 0
-    assert not result(execution)
+    assert not execution.result()
     assert not signal_mock.called
     assert not (execution.root / "should-not-exist").exists()
     assert worker.read_json(execution.root / worker.LIVE_FILE)["phase"] == "retained"
@@ -449,8 +449,8 @@ def test_owned_daemon_container_stops_after_wrapper_exits(execution, monkeypatch
     monkeypatch.setattr(worker, "call_docker", call)
     assert worker.run(execution.manifest) == 0
     assert actions and all(action[-1] == "immutable-owned-id" for action in actions)
-    assert result(execution)["container_exit_confirmed"]
-    assert result(execution)["container_identities"] == {"owned": "immutable-owned-id"}
+    assert execution.result()["container_exit_confirmed"]
+    assert execution.result()["container_identities"] == {"owned": "immutable-owned-id"}
 
 
 def test_unknown_container_never_authorizes_result(execution, monkeypatch):
@@ -462,7 +462,7 @@ def test_unknown_container_never_authorizes_result(execution, monkeypatch):
             "expected_mount": str(execution.root),
         }
     ]
-    stop(execution)
+    execution.stop()
     monkeypatch.setattr(
         worker, "inspect_container", lambda *args: ("unknown", None, None)
     )
@@ -487,7 +487,7 @@ def test_unknown_container_never_authorizes_result(execution, monkeypatch):
         )
     with pytest.raises(RuntimeError, match="end inspection"):
         worker.run(execution.manifest, recover=True)
-    assert not result(execution)
+    assert not execution.result()
 
 
 def test_output_count_ignores_symlinks_and_counts_hardlinks_once(tmp_path):
