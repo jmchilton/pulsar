@@ -24,6 +24,9 @@ from pulsar.managers.detached import (
     CLEAN_FILE,
     concurrent_jobs,
     DetachedLocalManager,
+    plan_reconcile,
+    PoolEntry,
+    ReconcilePlan,
 )
 from pulsar.managers.stateful import (
     JOB_FILE_PREPROCESSED,
@@ -132,6 +135,42 @@ def started(root):
 )
 def test_capacity_values(raw, expected):
     assert concurrent_jobs(raw) == expected
+
+
+def entry(job_id, state, submitted_at=1):
+    return PoolEntry(job_id, submitted_at, state)
+
+
+def test_plan_held_attempt_consumes_slot_and_is_never_admitted():
+    plan = plan_reconcile([entry("foreign", "held"), entry("next", "queued")], 1)
+    assert plan == ReconcilePlan(ensure_worker=[], admit=[])
+
+
+def test_plan_launched_attempt_gets_worker_and_consumes_slot():
+    launched = entry("running", "launched")
+    plan = plan_reconcile([launched, entry("next", "queued")], 1)
+    assert plan == ReconcilePlan(ensure_worker=[launched], admit=[])
+
+
+def test_plan_settled_attempt_releases_slot():
+    queued = entry("next", "queued")
+    plan = plan_reconcile([entry("done", "settled"), queued], 1)
+    assert plan == ReconcilePlan(ensure_worker=[], admit=[queued])
+
+
+def test_plan_admits_fifo_by_submission_then_job_id():
+    late = entry("a-late", "queued", submitted_at=3)
+    tie_b = entry("b-tie", "queued", submitted_at=2)
+    tie_c = entry("c-tie", "queued", submitted_at=2)
+    plan = plan_reconcile([late, tie_c, tie_b], 2)
+    assert plan.admit == [tie_b, tie_c]
+
+
+@pytest.mark.parametrize("capacity", [None, 0])
+def test_plan_unbounded_capacity_admits_everything(capacity):
+    queued = [entry(f"job-{index}", "queued", submitted_at=index) for index in range(3)]
+    plan = plan_reconcile([entry("held", "held"), *queued], capacity)
+    assert plan.admit == queued
 
 
 def test_cpu_capacity(monkeypatch):
@@ -398,18 +437,17 @@ def test_distinct_attempts_of_same_input_job_get_unique_roots(managers):
     assert one != two
 
 
-def test_host_boot_mismatch_is_retained_and_holds_capacity(managers):
+def test_host_boot_mismatch_is_retained_and_holds_capacity(managers, monkeypatch):
     manager = managers(num_concurrent_jobs=1)
     manager.shutdown(2)
     # Prevent initial worker launch so the test can set a foreign boot before
     # recovery. A durable reservation still consumes one slot.
-    original_spawn = manager._spawn_worker
-    manager._spawn_worker = lambda root, manifest: None
-    job_id, root = launch(manager, "raise SystemExit('must never run')")
+    with monkeypatch.context() as context:
+        context.setattr(manager, "_spawn_worker", lambda root, manifest: None)
+        job_id, root = launch(manager, "raise SystemExit('must never run')")
     manifest = worker.read_json(root / worker.MANIFEST_FILE)
     manifest["host_identity"] = {"hostname": "another-host", "boot_id": "another-boot"}
     worker.atomic_json(root / worker.MANIFEST_FILE, manifest)
-    manager._spawn_worker = original_spawn
     replacement = managers(num_concurrent_jobs=1)
     queued, queued_root = launch(replacement, "print('must remain queued')")
     assert replacement.get_status(job_id) == status.RUNNING

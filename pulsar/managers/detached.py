@@ -17,7 +17,15 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
+from dataclasses import (
+    dataclass,
+    field,
+)
 from pathlib import Path
+from typing import (
+    List,
+    Optional,
+)
 
 from pulsar.managers import status
 from pulsar.managers.stateful import JOB_FILE_PREPROCESSING_FAILED
@@ -66,6 +74,45 @@ def _seconds(value, name, allow_zero=False):
             f"{name} must be {'nonnegative' if allow_zero else 'positive'} and finite"
         )
     return result
+
+
+@dataclass(frozen=True)
+class PoolEntry:
+    """Capacity view of one attempt: settled, held, queued or launched.
+
+    A held attempt (foreign host or unreadable records) consumes a slot but
+    is never admitted or given a worker.
+    """
+
+    job_id: str
+    submitted_at: int
+    state: str
+    root: Optional[Path] = field(default=None, compare=False)
+    manifest: Optional[dict] = field(default=None, compare=False)
+
+
+@dataclass
+class ReconcilePlan:
+    ensure_worker: List[PoolEntry]
+    admit: List[PoolEntry]
+
+
+def plan_reconcile(entries, capacity):
+    """Held and launched attempts fill slots; queued ones are admitted FIFO."""
+    plan = ReconcilePlan([], [])
+    active = 0
+    for entry in entries:
+        if entry.state in ("held", "launched"):
+            active += 1
+        if entry.state == "launched":
+            plan.ensure_worker.append(entry)
+    queued = [entry for entry in entries if entry.state == "queued"]
+    for entry in sorted(queued, key=lambda entry: (entry.submitted_at, entry.job_id)):
+        if capacity and active >= capacity:
+            break
+        plan.admit.append(entry)
+        active += 1
+    return plan
 
 
 class DetachedLocalManager(BaseUnqueuedManager):
@@ -387,61 +434,66 @@ class DetachedLocalManager(BaseUnqueuedManager):
             return
         self._spawn_worker(root, manifest)
 
+    def _pool_entry(self, root):
+        """Classify one attempt, settling terminal and stopped queued ones."""
+        try:
+            manifest = self._read_manifest(root)
+            result = self._terminal_result(root, manifest)
+            if result:
+                self._write_return_code_if_unset(
+                    manifest["job_id"],
+                    str(result.get("return_code", result.get("returncode"))),
+                )
+                self._maybe_clean_locked(root, manifest)
+                state = "settled"
+            elif manifest["host_identity"] != worker.host_identity():
+                state = "held"
+            elif manifest.get("phase") == "queued":
+                if self._record(
+                    root, worker.STOP_FILE, manifest
+                ) or self._was_cancelled(manifest["job_id"]):
+                    self._request_stop_locked(root, manifest)
+                    self._maybe_clean_locked(root, manifest)
+                    state = "settled"
+                else:
+                    state = "queued"
+            else:
+                state = "launched"
+            return PoolEntry(
+                manifest["job_id"], manifest["submitted_at"], state, root, manifest
+            )
+        except Exception:
+            # Corrupt/foreign records cannot release capacity or authorize
+            # collection. Keep unrelated jobs manageable and log evidence.
+            log.exception("Retaining uncertain detached execution at %s", root)
+            return PoolEntry(root.name, 0, "held", root)
+
     def _reconcile_locked(self):
         self._children = [
             process for process in self._children if process.poll() is None
         ]
-        active = 0
-        queued = []
-        for path in sorted(
-            Path(self.staging_directory).glob(f"*/{worker.MANIFEST_FILE}")
-        ):
-            root = path.parent
+        entries = [
+            self._pool_entry(path.parent)
+            for path in sorted(
+                Path(self.staging_directory).glob(f"*/{worker.MANIFEST_FILE}")
+            )
+        ]
+        plan = plan_reconcile(entries, self.num_concurrent_jobs)
+        for entry in plan.ensure_worker:
             try:
-                manifest = self._read_manifest(root)
-                result = self._terminal_result(root, manifest)
-                if result:
-                    self._write_return_code_if_unset(
-                        manifest["job_id"],
-                        str(result.get("return_code", result.get("returncode"))),
-                    )
-                    self._maybe_clean_locked(root, manifest)
-                elif manifest["host_identity"] != worker.host_identity():
-                    active += 1
-                elif manifest.get("phase") == "queued":
-                    if self._record(
-                        root, worker.STOP_FILE, manifest
-                    ) or self._was_cancelled(manifest["job_id"]):
-                        self._request_stop_locked(root, manifest)
-                        self._maybe_clean_locked(root, manifest)
-                    else:
-                        queued.append(
-                            (
-                                manifest["submitted_at"],
-                                manifest["job_id"],
-                                root,
-                                manifest,
-                            )
-                        )
-                else:
-                    active += 1
-                    self._ensure_worker(root, manifest)
+                self._ensure_worker(entry.root, entry.manifest)
             except Exception:
-                # Corrupt/foreign records cannot release capacity or authorize
-                # collection. Keep unrelated jobs manageable and log evidence.
-                active += 1
-                log.exception("Retaining uncertain detached execution at %s", root)
-        for _, _, root, manifest in sorted(queued):
-            if self.num_concurrent_jobs and active >= self.num_concurrent_jobs:
-                break
-            manifest["phase"] = "launching"
-            worker.atomic_json(root / worker.MANIFEST_FILE, manifest)
-            active += 1
+                log.exception(
+                    "Retaining uncertain detached execution at %s", entry.root
+                )
+        for entry in plan.admit:
+            entry.manifest["phase"] = "launching"
+            worker.atomic_json(entry.root / worker.MANIFEST_FILE, entry.manifest)
             try:
-                self._spawn_worker(root, manifest)
+                self._spawn_worker(entry.root, entry.manifest)
             except Exception:
                 # The durable reservation remains and is retried on recovery.
-                log.exception("Unable to start detached supervisor at %s", root)
+                log.exception("Unable to start detached supervisor at %s", entry.root)
 
     def _monitor_execution(self, *args, **kwargs):
         raise NotImplementedError("Detached workers, not the manager, monitor execution")
