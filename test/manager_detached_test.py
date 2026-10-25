@@ -435,6 +435,22 @@ def test_policy_is_snapshotted_and_enforced(managers):
     )
 
 
+def test_container_config_snapshotted_into_manifest(managers):
+    manager = managers()
+    job_id = manager.setup_job("interactive", "ordinary_tool", "1")
+    root = Path(manager.job_directory(job_id).job_directory)
+    entry_point_config = {"container_name": "owned", "callback_url": None}
+    (root / "configs" / "container_config.json").write_text(
+        json.dumps({"entry_point_config": entry_point_config})
+    )
+    manager.launch(job_id, "true")
+    manifest = worker.read_json(root / worker.MANIFEST_FILE)
+    assert manifest["entry_point_config"] == entry_point_config
+    assert (root / "working" / "import").is_dir()
+    assert (root / "working" / "tmp").is_dir()
+    completed(manager, job_id)
+
+
 def test_reservation_recovers_when_manager_dies_before_worker_fork(
     managers, monkeypatch
 ):
