@@ -4,6 +4,7 @@ Real subprocess tests deliberately kill supervisors rather than mocking restart.
 Docker tests verify ownership and terminal-state decisions without a daemon.
 """
 
+import ipaddress
 import json
 import os
 import shutil
@@ -666,3 +667,35 @@ def test_revoked_entry_point_callback_is_not_retried(
     worker.publish_entry_points(execution.manifest, snapshot, PORT_INFO)
     assert snapshot["entry_points_revoked"]
     assert len(callback_server.requests) == 1
+
+
+def test_entry_points_without_callback_written_to_job_directory(execution):
+    execution.manifest["entry_point_config"] = {"container_name": "owned"}
+    snapshot = {}
+    worker.publish_entry_points(execution.manifest, snapshot, PORT_INFO)
+    assert snapshot["entry_points_published"]
+    assert worker.read_json(execution.root / "container_runtime.json") == {
+        "8888": {
+            "tool_port": 8888,
+            "host": "127.0.0.1",
+            "port": 34567,
+            "protocol": "http",
+        }
+    }
+
+
+@pytest.mark.parametrize("address", ["::", "[::]"])
+def test_entry_point_ipv6_wildcard_skipped(address):
+    assert worker._entry_point_host(address, {}) is None
+
+
+def test_entry_point_wildcard_uses_get_ip_method():
+    configuration = {"get_ip_method": "command:echo 10.1.2.3"}
+    assert worker._entry_point_host("0.0.0.0", configuration) == "10.1.2.3"
+    assert worker._entry_point_host("0.0.0.0", {"get_ip_method": "other:x"}) is None
+
+
+def test_entry_point_wildcard_defaults_to_routable_address():
+    host = worker._entry_point_host("0.0.0.0", {})
+    assert ipaddress.ip_address(host).version == 4
+    assert host != "0.0.0.0"
