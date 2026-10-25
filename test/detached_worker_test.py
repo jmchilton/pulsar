@@ -293,6 +293,16 @@ def test_native_output_limit_is_per_file_not_total_job_output(execution):
     assert not (execution.root / worker.STOP_FILE).exists()
 
 
+def test_native_output_limit_applies_per_declared_file(tmp_path):
+    paths = [tmp_path / "first", tmp_path / "second"]
+    for path in paths:
+        path.write_bytes(b"123456")
+    limits = {"output_size_bytes": 10, "output_paths": [str(path) for path in paths]}
+    assert worker.exceeded_limit({"limits": limits}, None) is None
+    paths[1].write_bytes(b"12345678901")
+    assert worker.exceeded_limit({"limits": limits}, None) == "output_size"
+
+
 def test_native_output_limit_counts_a_symlinked_declared_file(tmp_path):
     target = tmp_path / "actual"
     target.write_bytes(b"12345678901")
@@ -302,8 +312,8 @@ def test_native_output_limit_counts_a_symlinked_declared_file(tmp_path):
     assert worker.exceeded_limit(manifest, None) == "output_size"
 
 
-def test_aggregate_directory_limit_requires_separate_explicit_policy(execution):
-    directory = execution.root / "aggregate-output"
+def test_aggregate_directory_limit_enforced(tmp_path):
+    directory = tmp_path / "aggregate-output"
     directory.mkdir()
     (directory / "first").write_bytes(b"123456")
     (directory / "second").write_bytes(b"123456")
@@ -312,6 +322,11 @@ def test_aggregate_directory_limit_requires_separate_explicit_policy(execution):
         "output_directory_size_bytes": 10,
     }
     assert worker.exceeded_limit({"limits": limits}, None) == "output_directory_size"
+    limits["output_directory_size_bytes"] = 12
+    assert worker.exceeded_limit({"limits": limits}, None) is None
+
+
+def test_aggregate_directory_limit_requires_paired_fields(execution):
     execution.manifest["limits"] = {
         "output_directory": str(execution.root),
         "output_size_bytes": 10,
