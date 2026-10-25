@@ -422,10 +422,17 @@ def test_policy_is_snapshotted_and_enforced(managers):
         worker.read_json(root / worker.MANIFEST_FILE)["limits"]["walltime_seconds"]
         == 0.25
     )
+    (root / "configs" / "detached_execution.json").write_text(
+        json.dumps({"schema": 1, "containers": [], "limits": {}})
+    )
     manager.shutdown(2)
     # Enforcement is in the detached worker, not the manager polling thread.
     completed(manager, job_id, status.FAILED)
     assert "walltime" in worker.read_json(root / worker.RESULT_FILE)["failure"].lower()
+    assert (
+        b"Detached execution: Execution exceeded walltime limit"
+        in manager.job_stderr_contents(job_id)
+    )
 
 
 def test_reservation_recovers_when_manager_dies_before_worker_fork(
