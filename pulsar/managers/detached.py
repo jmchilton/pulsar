@@ -27,6 +27,8 @@ from typing import (
     Optional,
 )
 
+from typing_extensions import Literal
+
 from pulsar.managers import status
 from pulsar.managers.stateful import JOB_FILE_PREPROCESSING_FAILED
 from pulsar.managers.unqueued import (
@@ -76,6 +78,9 @@ def _seconds(value, name, allow_zero=False):
     return result
 
 
+PoolState = Literal["settled", "held", "queued", "launched"]
+
+
 @dataclass(frozen=True)
 class PoolEntry:
     """Capacity view of one attempt: settled, held, queued or launched.
@@ -86,7 +91,7 @@ class PoolEntry:
 
     job_id: str
     submitted_at: int
-    state: str
+    state: PoolState
     root: Optional[Path] = field(default=None, compare=False)
     manifest: Optional[dict] = field(default=None, compare=False)
 
