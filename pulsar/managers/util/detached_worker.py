@@ -561,6 +561,9 @@ def _command_gate(manifest):
                                 env=manifest["environment"],
                             )
                             code = process.wait()
+                            if code < 0:
+                                # Match the shell convention native Galaxy scripts record.
+                                code = 128 - code
                 except OSError as error:
                     code = 127
                     command["failure"] = (
@@ -824,9 +827,8 @@ def supervise(manifest, recover=False):
                 return finish(
                     int(exit_record["return_code"]), stop is not None, failure
                 )
-            code = (proc.returncode if proc is not None else None) or (
-                143 if stop else 1
-            )
+            # The gate records an exit unless SIGKILL ended it with the group.
+            code = 137 if stop else 1
             return finish(
                 code,
                 stop is not None,
