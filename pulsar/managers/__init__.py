@@ -112,6 +112,18 @@ class ManagerInterface:
         Confirm the client imported this job's outputs; True once nothing awaits collection.
         """
 
+    @abstractmethod
+    def confirm_cancelled_before_launch(self, job_id: str) -> bool:
+        """
+        Record that a cancelled job never launched; True if the manager supports this.
+        """
+
+    @abstractmethod
+    def cancelled_before_launch_confirmed(self, job_id: str) -> bool:
+        """
+        True when durable proof exists that a cancelled job never launched.
+        """
+
     # TODO return type? Is this implemented anywhere, should be or? Found it only in ManagerProxy
     @abstractmethod
     def job_directory(self, job_id: str):
@@ -142,6 +154,9 @@ class ManagerProxy:
     def confirm_cancelled_before_launch(self, *args, **kwargs):
         """Forward optional cancellation confirmation after preprocessing exits."""
         return self._proxied_manager.confirm_cancelled_before_launch(*args, **kwargs)
+
+    def cancelled_before_launch_confirmed(self, *args, **kwargs):
+        return self._proxied_manager.cancelled_before_launch_confirmed(*args, **kwargs)
 
     def launch(self, *args, **kwargs) -> None:
         return self._proxied_manager.launch(*args, **kwargs)
