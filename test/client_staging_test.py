@@ -148,6 +148,12 @@ class TestStager(TempDirectoryTestCase):
         self._assert_inputs_uploaded()
 
     def test_input_with_url_is_staged_from_the_url_without_a_local_file(self):
+        self._assert_url_input_staged(rewrite_paths=False)
+
+    def test_input_with_url_rewrites_command_and_config_without_a_local_file(self):
+        self._assert_url_input_staged(rewrite_paths=True)
+
+    def _assert_url_input_staged(self, rewrite_paths):
         # Galaxy need not pull an input into its cache when it hands out a URL for it.
         self.client.default_file_action = "remote_transfer"
         self.job_config["job_directory"] = "/pulsar/staging/1"
@@ -156,7 +162,14 @@ class TestStager(TempDirectoryTestCase):
         self.client_job_description.client_inputs = ClientInputs(
             [ClientInput(never_pulled, CLIENT_INPUT_PATH_TYPES.INPUT_PATH, url=url)]
         )
+        expected_config = None
+        if rewrite_paths:
+            expected_config = self._configure_input_rewrite(
+                [never_pulled], ["/pulsar/staging/1/inputs/dataset_3.dat"]
+            )
         self._submit()
+        if rewrite_paths:
+            self._assert_remote_config_contents(expected_config)
         staged_inputs = [
             (staged["name"], staged["action"]["url"])
             for staged in self.client.launched_remote_staging["setup"]
@@ -204,6 +217,12 @@ class TestStager(TempDirectoryTestCase):
             self._submit()
 
     def test_extra_files_manifest_is_staged_from_urls_without_a_local_directory(self):
+        self._assert_manifest_staged(rewrite_paths=False)
+
+    def test_extra_files_manifest_rewrites_command_and_config_without_a_local_directory(self):
+        self._assert_manifest_staged(rewrite_paths=True)
+
+    def _assert_manifest_staged(self, rewrite_paths):
         # Galaxy lists a composite input's extra files from the object store and
         # hands out one URL per file, so the directory need not exist locally.
         self.client.default_file_action = "remote_transfer"
@@ -217,7 +236,15 @@ class TestStager(TempDirectoryTestCase):
         self.client_job_description.client_inputs = ClientInputs(
             [ClientInput(never_pulled, CLIENT_INPUT_PATH_TYPES.INPUT_EXTRA_FILES_PATH, extra_files=manifest)]
         )
+        expected_config = None
+        if rewrite_paths:
+            expected_config = self._configure_input_rewrite(
+                [os.path.join(never_pulled, name) for name in manifest],
+                [f"/pulsar/staging/1/inputs/dataset_3_files/{name}" for name in manifest],
+            )
         self._submit()
+        if rewrite_paths:
+            self._assert_remote_config_contents(expected_config)
         staged_inputs = {
             staged["name"]: staged["action"]["url"]
             for staged in self.client.launched_remote_staging["setup"]
@@ -227,6 +254,28 @@ class TestStager(TempDirectoryTestCase):
             "dataset_3_files/moo/cow.txt": manifest["moo/cow.txt"],
             "dataset_3_files/index.html": manifest["index.html"],
         }
+
+    def _configure_input_rewrite(self, local_paths, remote_paths):
+        self.client_job_description.rewrite_paths = True
+        self.client.files_endpoint = "https://galaxy.test/api/jobs/1/files"
+        self.client.prefer_local_staging = False
+        self.job_config["system_properties"]["separator"] = "/"
+        config_path = os.path.join(self.temp_directory, "input_paths.conf")
+        with open(config_path, "w") as config:
+            config.write("\n".join(local_paths))
+        self.client_job_description.config_files = [config_path]
+        self.client_job_description.command_line = "run_test.exe " + " ".join(local_paths)
+        self.client.expect_command_line("run_test.exe " + " ".join(remote_paths))
+        return "\n".join(remote_paths)
+
+    def _assert_remote_config_contents(self, expected_contents):
+        staged_configs = [
+            staged for staged in self.client.launched_remote_staging["setup"]
+            if staged["type"] == "config"
+        ]
+        assert len(staged_configs) == 1
+        assert staged_configs[0]["name"] == "input_paths.conf"
+        assert staged_configs[0]["action"]["contents"] == expected_contents
 
     def _assert_inputs_uploaded(self):
         # Expect both files staged
