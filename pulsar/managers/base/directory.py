@@ -240,18 +240,19 @@ class DirectoryBaseManager(BaseManager):
         script = job_script(**script_env)
         return self._write_job_script(job_id, script)
 
+    @staticmethod
+    def _per_job_option(setup_params: Optional[Dict[str, Any]], name: str) -> Any:
+        """A Galaxy destination's per-job override of a manager option, or None to use the manager default."""
+        return (setup_params or {}).get(name)
+
     def _cvmfsexec_config(self, setup_params):
-        # A per-job cvmfsexec override (delivered from the Galaxy job destination
-        # via setup_params) takes precedence over the manager default.
-        override = (setup_params or {}).get("cvmfsexec")
+        override = self._per_job_option(setup_params, "cvmfsexec")
         if override is not None:
             return cvmfsexec.parse(override)
         return self.cvmfsexec_config
 
-    def _check_cgroup_oom_kills(self, setup_params: Dict[str, Any]) -> bool:
-        # A per-job setting (delivered from the Galaxy job destination via
-        # setup_params) takes precedence over the manager default.
-        override = setup_params.get("check_cgroup_oom_kills")
+    def _check_cgroup_oom_kills(self, setup_params: Optional[Dict[str, Any]]) -> bool:
+        override = self._per_job_option(setup_params, "check_cgroup_oom_kills")
         if override is not None:
             return asbool(override)
         return self.check_cgroup_oom_kills

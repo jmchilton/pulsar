@@ -262,14 +262,15 @@ def test_removed_jobs_directory_token_is_rejected():
     assert "jobs_directory" in message
 
 
-def test_check_cgroup_oom_kills_reaches_setup_params_without_triggering_setup():
+@pytest.mark.parametrize("name, value", [("check_cgroup_oom_kills", True), ("cvmfsexec", {"path": "/opt/cvmfsexec"})])
+def test_per_job_manager_options_reach_setup_params_without_triggering_setup(name, value):
     mgr = _FakeManager(_FakeJobDirectory(exists=True, metadata={}))
-    manager_endpoint_util.submit_job(mgr, _job_config(check_cgroup_oom_kills=True))
-    assert mgr.launch_config["setup_params"] == {"check_cgroup_oom_kills": True}
+    manager_endpoint_util.submit_job(mgr, _job_config(**{name: value}))
+    assert mgr.launch_config["setup_params"] == {name: value}
     assert mgr.setup_job_calls == 0
 
 
-def test_check_cgroup_oom_kills_absent_leaves_setup_params_alone():
+def test_absent_per_job_manager_options_leave_setup_params_alone():
     mgr = _FakeManager(_FakeJobDirectory(exists=True, metadata={}))
-    manager_endpoint_util.submit_job(mgr, _job_config())
-    assert "check_cgroup_oom_kills" not in mgr.launch_config["setup_params"]
+    manager_endpoint_util.submit_job(mgr, _job_config(check_cgroup_oom_kills=None))
+    assert mgr.launch_config["setup_params"] == {}

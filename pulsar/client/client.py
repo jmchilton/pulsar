@@ -20,7 +20,10 @@ from .decorators import (
     parseJson,
     retry,
 )
-from .destination import submit_params
+from .destination import (
+    per_job_manager_options,
+    submit_params,
+)
 from .exceptions import OutputNotFoundException as OutputNotFoundException
 from .job_directory import RemoteJobDirectory
 from .setup_handler import build as build_setup_handler
@@ -56,11 +59,8 @@ class BaseJobClient:
         for attr in ["ssh_key", "ssh_user", "ssh_host", "ssh_port"]:
             setattr(self, attr, destination_params.get(attr, None))
         self.env = destination_params.get("env", [])
-        # Optional cvmfsexec configuration; delivered to the Pulsar manager via
-        # setup_params so it can override the manager's app.yml default.
-        self.cvmfsexec = destination_params.get("cvmfsexec", None)
-        # Optional job script cgroup OOM-kill check; delivered like cvmfsexec.
-        self.check_cgroup_oom_kills = destination_params.get("check_cgroup_oom_kills", None)
+        # Delivered to the Pulsar manager via setup_params to override its app.yml defaults.
+        self.manager_options = per_job_manager_options(destination_params)
         self.files_endpoint = destination_params.get("files_endpoint", None)
         self.token_endpoint = destination_params.get("token_endpoint", None)
         self.external_id = destination_params.get("external_id", None)
@@ -157,10 +157,8 @@ class JobClient(BaseJobClient):
             launch_params['submit_extras'] = json_dumps({'touch_outputs': job_config['touch_outputs']})
         if token_endpoint is not None:
             launch_params["token_endpoint"] = json_dumps({'token_endpoint': token_endpoint})
-        if self.cvmfsexec is not None:
-            launch_params['cvmfsexec'] = json_dumps(self.cvmfsexec)
-        if self.check_cgroup_oom_kills is not None:
-            launch_params['check_cgroup_oom_kills'] = json_dumps(self.check_cgroup_oom_kills)
+        for name, value in self.manager_options.items():
+            launch_params[name] = json_dumps(value)
 
         if job_config and self.setup_handler.local:
             # Setup not yet called, job properties were inferred from
@@ -336,10 +334,7 @@ class BaseRemoteConfiguredJobClient(BaseJobClient):
             launch_params['remote_staging']['ssh_key'] = self.ssh_key
         launch_params['dynamic_file_sources'] = dynamic_file_sources
         launch_params['token_endpoint'] = token_endpoint
-        if self.cvmfsexec is not None:
-            launch_params['cvmfsexec'] = self.cvmfsexec
-        if self.check_cgroup_oom_kills is not None:
-            launch_params['check_cgroup_oom_kills'] = self.check_cgroup_oom_kills
+        launch_params.update(self.manager_options)
 
         if job_config and self.setup_handler.local:
             # Setup not yet called, job properties were inferred from

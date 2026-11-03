@@ -3,6 +3,8 @@ from re import match
 from .util import filter_destination_params
 
 SUBMIT_PREFIX = "submit_"
+# Destination params a Pulsar manager accepts per job, overriding its app.yml default.
+PER_JOB_MANAGER_OPTIONS = ("cvmfsexec", "check_cgroup_oom_kills")
 
 
 def url_to_destination_params(url):
@@ -56,3 +58,16 @@ def submit_params(destination_params):
     {'native_specification': '-q batch'}
     """
     return filter_destination_params(destination_params, SUBMIT_PREFIX)
+
+
+def per_job_manager_options(destination_params):
+    """
+
+    >>> per_job_manager_options({"url": "http://localhost:8913/", "check_cgroup_oom_kills": True, "cvmfsexec": None})
+    {'check_cgroup_oom_kills': True}
+    """
+    return {
+        name: destination_params[name]
+        for name in PER_JOB_MANAGER_OPTIONS
+        if destination_params.get(name) is not None
+    }

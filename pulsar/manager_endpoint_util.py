@@ -9,6 +9,7 @@ from io import BytesIO
 from galaxy.util import unicodify
 
 from pulsar import __version__ as pulsar_version
+from pulsar.client.destination import per_job_manager_options
 from pulsar.client.setup_handler import build_job_config
 from pulsar.managers import (
     PULSAR_UNKNOWN_RETURN_CODE,
@@ -113,8 +114,7 @@ def submit_job(manager, job_config):
         touch_outputs = job_config.get('touch_outputs', [])
         dynamic_file_sources = job_config.get("dynamic_file_sources", None)
         token_endpoint = job_config.get("token_endpoint", None)
-        cvmfsexec = job_config.get("cvmfsexec", None)
-        check_cgroup_oom_kills = job_config.get("check_cgroup_oom_kills", None)
+        manager_options = per_job_manager_options(job_config)
 
         job_config = None
         if setup_params or force_setup:
@@ -149,13 +149,11 @@ def submit_job(manager, job_config):
                     "configured on this Pulsar server instead." % REMOVED_JOBS_DIRECTORY_TOKEN
                 )
 
-        # Deliver per-job cvmfsexec and check_cgroup_oom_kills overrides to the manager via setup_params.
+        # Deliver per-job manager option overrides to the manager via setup_params.
         # Merged here (after the setup decision above) so it does not itself
         # trigger job setup.
-        if cvmfsexec is not None:
-            setup_params = {**setup_params, "cvmfsexec": cvmfsexec}
-        if check_cgroup_oom_kills is not None:
-            setup_params = {**setup_params, "check_cgroup_oom_kills": check_cgroup_oom_kills}
+        if manager_options:
+            setup_params = {**setup_params, **manager_options}
 
         manager.touch_outputs(job_id, touch_outputs)
         launch_config = {

@@ -199,11 +199,19 @@ def test_launch_forwards_check_cgroup_oom_kills():
     request_checker.assert_called()
 
 
-def test_message_launch_forwards_check_cgroup_oom_kills():
-    destination_params = {"check_cgroup_oom_kills": True, "jobs_directory": "/pulsar/staging"}
-    client = MessageJobClient(destination_params, "543", client_manager=None)
-    message = client._build_setup_message("python", None, [], {}, None, None, None)
-    assert message["check_cgroup_oom_kills"] is True
+@pytest.mark.parametrize("name, value", [("check_cgroup_oom_kills", True), ("cvmfsexec", {"path": "/opt/cvmfsexec"})])
+def test_message_launch_forwards_per_job_manager_options(name, value):
+    client = MessageJobClient({name: value, "jobs_directory": "/pulsar/staging"}, "543", client_manager=None)
+    message = client._build_setup_message(
+        "python",
+        dependencies_description=None,
+        env=[],
+        remote_staging={},
+        job_config=None,
+        dynamic_file_sources=None,
+        token_endpoint=None,
+    )
+    assert message[name] == value
 
 
 def __test_upload(upload_type):
