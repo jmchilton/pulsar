@@ -248,6 +248,14 @@ class DirectoryBaseManager(BaseManager):
             return cvmfsexec.parse(override)
         return self.cvmfsexec_config
 
+    def _check_cgroup_oom_kills(self, setup_params: Dict[str, Any]) -> bool:
+        # A per-job setting (delivered from the Galaxy job destination via
+        # setup_params) takes precedence over the manager default.
+        override = setup_params.get("check_cgroup_oom_kills")
+        if override is not None:
+            return asbool(override)
+        return self.check_cgroup_oom_kills
+
     def _tmp_dir(self, job_id: str) -> Optional[str]:
         # Code stolen from Galaxy's job wrapper.
         tmp_dir = self.tmp_dir
@@ -294,6 +302,7 @@ class DirectoryBaseManager(BaseManager):
             "job_id": job_id,
             "tmp_dir_creation_statement": self._tmp_dir(job_id),
             "prepare_dirs_statement": self._prepare_dirs(job_id),
+            "check_cgroup_oom_kills": self._check_cgroup_oom_kills(setup_params),
         }
         if command_line:
             job_template_env["command"] = command_line

@@ -41,6 +41,7 @@ from typing import (
 from uuid import uuid4
 
 from galaxy.util import (
+    asbool,
     shrink_stream_by_size,
     smart_str,
 )
@@ -114,6 +115,9 @@ class BaseManager(ManagerInterface, ABC):
         # Default cvmfsexec configuration for this manager (app.yml). May be
         # overridden per job by a ``cvmfsexec`` entry in setup_params.
         self.cvmfsexec_config = parse_cvmfsexec_config(kwds.get("cvmfsexec"))
+        # Default for the job script's cgroup OOM-kill check (app.yml). May be
+        # overridden per job by a ``check_cgroup_oom_kills`` entry in setup_params.
+        self.check_cgroup_oom_kills = asbool(kwds.get("check_cgroup_oom_kills", False))
         self.debug = str(kwds.get("debug", False)).lower() == "true"
         self.authorizer = app.authorizer
         self.user_auth_manager = app.user_auth_manager

@@ -62,7 +62,8 @@ def clean(manager, job_id):
 
 @PulsarController(path="/jobs/{job_id}/submit", method="POST")
 def submit(manager, job_id, command_line, params='{}', dependencies_description='null', setup_params='{}',
-           remote_staging='{}', env='[]', submit_extras='{}', dynamic_file_sources='null', cvmfsexec='null'):
+           remote_staging='{}', env='[]', submit_extras='{}', dynamic_file_sources='null', cvmfsexec='null',
+           check_cgroup_oom_kills='null'):
     submit_params = loads(params)
     setup_params = loads(setup_params)
     dependencies_description = loads(dependencies_description)
@@ -71,6 +72,7 @@ def submit(manager, job_id, command_line, params='{}', dependencies_description=
     submit_extras = loads(submit_extras)
     dynamic_file_sources = loads(dynamic_file_sources)
     cvmfsexec = loads(cvmfsexec)
+    check_cgroup_oom_kills = loads(check_cgroup_oom_kills)
     submit_config = {
         "job_id": job_id,
         "command_line": command_line,
@@ -81,6 +83,7 @@ def submit(manager, job_id, command_line, params='{}', dependencies_description=
         "remote_staging": remote_staging,
         "dynamic_file_sources": dynamic_file_sources,
         "cvmfsexec": cvmfsexec,
+        "check_cgroup_oom_kills": check_cgroup_oom_kills,
     }
     submit_config.update(submit_extras)
     submit_job(manager, submit_config)

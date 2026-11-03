@@ -82,3 +82,18 @@ def _wait_for_complete_status(app, job_id, timeout=10):
         timeout=timeout,
         interval=.05,
     )
+
+
+def test_submit_check_cgroup_oom_kills():
+    with test_pulsar_app(test_conf={"extra_environ": {"REMOTE_ADDR": "127.101.101.98"}}) as app:
+        setup_response = app.post("/jobs?job_id=12346")
+        setup_config = json.loads(setup_response.body.decode("utf-8"))
+        job_id = setup_config["job_id"]
+        job_directory = os.path.dirname(setup_config["working_directory"])
+        command_line = quote('sh -c "exit 4"')
+        app.post(f"/jobs/{job_id}/submit?command_line={command_line}&check_cgroup_oom_kills=true")
+
+        check_config = _wait_for_complete_status(app, job_id)
+        assert check_config["returncode"] == 4
+        with open(os.path.join(job_directory, "command.sh")) as job_script:
+            assert "\n_galaxy_report_oom_kills\n" in job_script.read()

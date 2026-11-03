@@ -59,6 +59,8 @@ class BaseJobClient:
         # Optional cvmfsexec configuration; delivered to the Pulsar manager via
         # setup_params so it can override the manager's app.yml default.
         self.cvmfsexec = destination_params.get("cvmfsexec", None)
+        # Optional job script cgroup OOM-kill check; delivered like cvmfsexec.
+        self.check_cgroup_oom_kills = destination_params.get("check_cgroup_oom_kills", None)
         self.files_endpoint = destination_params.get("files_endpoint", None)
         self.token_endpoint = destination_params.get("token_endpoint", None)
         self.external_id = destination_params.get("external_id", None)
@@ -157,6 +159,8 @@ class JobClient(BaseJobClient):
             launch_params["token_endpoint"] = json_dumps({'token_endpoint': token_endpoint})
         if self.cvmfsexec is not None:
             launch_params['cvmfsexec'] = json_dumps(self.cvmfsexec)
+        if self.check_cgroup_oom_kills is not None:
+            launch_params['check_cgroup_oom_kills'] = json_dumps(self.check_cgroup_oom_kills)
 
         if job_config and self.setup_handler.local:
             # Setup not yet called, job properties were inferred from
@@ -334,6 +338,8 @@ class BaseRemoteConfiguredJobClient(BaseJobClient):
         launch_params['token_endpoint'] = token_endpoint
         if self.cvmfsexec is not None:
             launch_params['cvmfsexec'] = self.cvmfsexec
+        if self.check_cgroup_oom_kills is not None:
+            launch_params['check_cgroup_oom_kills'] = self.check_cgroup_oom_kills
 
         if job_config and self.setup_handler.local:
             # Setup not yet called, job properties were inferred from

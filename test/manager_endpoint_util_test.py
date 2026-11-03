@@ -260,3 +260,16 @@ def test_removed_jobs_directory_token_is_rejected():
     message = str(exc_info.value)
     assert "__PULSAR_JOBS_DIRECTORY__" in message
     assert "jobs_directory" in message
+
+
+def test_check_cgroup_oom_kills_reaches_setup_params_without_triggering_setup():
+    mgr = _FakeManager(_FakeJobDirectory(exists=True, metadata={}))
+    manager_endpoint_util.submit_job(mgr, _job_config(check_cgroup_oom_kills=True))
+    assert mgr.launch_config["setup_params"] == {"check_cgroup_oom_kills": True}
+    assert mgr.setup_job_calls == 0
+
+
+def test_check_cgroup_oom_kills_absent_leaves_setup_params_alone():
+    mgr = _FakeManager(_FakeJobDirectory(exists=True, metadata={}))
+    manager_endpoint_util.submit_job(mgr, _job_config())
+    assert "check_cgroup_oom_kills" not in mgr.launch_config["setup_params"]

@@ -10,7 +10,10 @@ from unittest.mock import (
 import pytest
 
 from pulsar import __version__ as pulsar_version
-from pulsar.client.client import JobClient
+from pulsar.client.client import (
+    JobClient,
+    MessageJobClient,
+)
 from pulsar.client.decorators import (
     MAX_RETRY_COUNT,
     retry,
@@ -69,8 +72,10 @@ class TestClient(JobClient):
     """ A dervative of the Client class that replaces the url_open
     method so that requests can be inspected and responses faked."""
 
-    def __init__(self):
-        JobClient.__init__(self, {}, "543", HttpPulsarInterface({"url": "http://test:803/"}, TestTransport(self)))
+    def __init__(self, destination_params=None):
+        JobClient.__init__(
+            self, destination_params or {}, "543", HttpPulsarInterface({"url": "http://test:803/"}, TestTransport(self))
+        )
         self.expects = deque()
 
     def expect_open(self, checker, response):
@@ -184,6 +189,21 @@ def test_launch():
     client.expect_open(request_checker, 'OK')
     client.launch("python")
     request_checker.assert_called()
+
+
+def test_launch_forwards_check_cgroup_oom_kills():
+    client = TestClient({"check_cgroup_oom_kills": True})
+    request_checker = RequestChecker("jobs/543/submit", {"command_line": "python", "check_cgroup_oom_kills": "true"})
+    client.expect_open(request_checker, 'OK')
+    client.launch("python")
+    request_checker.assert_called()
+
+
+def test_message_launch_forwards_check_cgroup_oom_kills():
+    destination_params = {"check_cgroup_oom_kills": True, "jobs_directory": "/pulsar/staging"}
+    client = MessageJobClient(destination_params, "543", client_manager=None)
+    message = client._build_setup_message("python", None, [], {}, None, None, None)
+    assert message["check_cgroup_oom_kills"] is True
 
 
 def __test_upload(upload_type):

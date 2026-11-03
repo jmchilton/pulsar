@@ -114,6 +114,7 @@ def submit_job(manager, job_config):
         dynamic_file_sources = job_config.get("dynamic_file_sources", None)
         token_endpoint = job_config.get("token_endpoint", None)
         cvmfsexec = job_config.get("cvmfsexec", None)
+        check_cgroup_oom_kills = job_config.get("check_cgroup_oom_kills", None)
 
         job_config = None
         if setup_params or force_setup:
@@ -148,11 +149,13 @@ def submit_job(manager, job_config):
                     "configured on this Pulsar server instead." % REMOVED_JOBS_DIRECTORY_TOKEN
                 )
 
-        # Deliver a per-job cvmfsexec override to the manager via setup_params.
+        # Deliver per-job cvmfsexec and check_cgroup_oom_kills overrides to the manager via setup_params.
         # Merged here (after the setup decision above) so it does not itself
         # trigger job setup.
         if cvmfsexec is not None:
             setup_params = {**setup_params, "cvmfsexec": cvmfsexec}
+        if check_cgroup_oom_kills is not None:
+            setup_params = {**setup_params, "check_cgroup_oom_kills": check_cgroup_oom_kills}
 
         manager.touch_outputs(job_id, touch_outputs)
         launch_config = {
