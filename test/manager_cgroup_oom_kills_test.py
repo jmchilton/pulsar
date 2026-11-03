@@ -35,12 +35,13 @@ class CgroupOomKillsManagerTest(BaseManagerTestCase):
         )
         assert REPORT not in script
 
-    def test_job_keeps_return_code(self):
+    def test_enabled_job_runs_cleanly(self):
         manager = Manager("_default_", self.app, check_cgroup_oom_kills=True)
         job_id = manager.setup_job("302", "tool1", "1.0.0")
         manager.launch(job_id, 'sh -c "exit 4"')
         self._wait_for_completion(manager, job_id)
         assert manager.return_code(job_id) == 4
+        assert manager.job_stderr_contents(job_id) == b""
         manager.clean(job_id)
 
     def _wait_for_completion(self, manager, job_id):

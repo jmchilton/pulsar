@@ -31,14 +31,18 @@
 #    ## job destination (not here) with a file_actions rewrite rule; see the
 #    ## example in the "Galaxy Configuration" section of Pulsar's docs:
 #    ## https://pulsar.readthedocs.io/en/latest/galaxy_conf.html
+#
 #    ## Report OOM kills in each job's memory cgroup (cgroup v2 memory.events,
 #    ## v1 memory.oom_control) on the job's stderr, so Galaxy fails the job with
 #    ## an out of memory error even when it exited 0 (e.g. a process killed in
-#    ## the middle of a pipeline). Only enable this where the resource manager
-#    ## gives each job its own cgroup (e.g. Slurm's cgroup task plugin); kills
-#    ## elsewhere in a shared cgroup would be blamed on the job. Docker containers
-#    ## run in the Docker daemon's cgroup, so their kills are not seen. A Galaxy
-#    ## `check_cgroup_oom_kills` job destination param overrides this per job.
+#    ## the middle of a pipeline). Only enable this for cluster managers
+#    ## (queued_drmaa, queued_cli, ...) whose resource manager gives each job its
+#    ## own cgroup (e.g. Slurm's cgroup task plugin); queued_python jobs share
+#    ## Pulsar's cgroup, so another process's kill would be blamed on the job.
+#    ## Docker containers run in the Docker daemon's cgroup, so their kills are
+#    ## not seen, and coexecution (Kubernetes, TES, GCP) jobs don't report it.
+#    ## A Galaxy `check_cgroup_oom_kills` job destination param overrides this
+#    ## per job.
 #    #check_cgroup_oom_kills: false
 
 

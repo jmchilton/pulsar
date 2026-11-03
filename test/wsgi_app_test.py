@@ -95,5 +95,6 @@ def test_submit_check_cgroup_oom_kills():
 
         check_config = _wait_for_complete_status(app, job_id)
         assert check_config["returncode"] == 4
+        assert check_config["job_stderr"] == ""
         with open(os.path.join(job_directory, "command.sh")) as job_script:
             assert "\n_galaxy_report_oom_kills\n" in job_script.read()
