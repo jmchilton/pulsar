@@ -30,10 +30,12 @@ class CgroupOomKillsManagerTest(BaseManagerTestCase):
         assert REPORT in self._script_for(setup_params={"check_cgroup_oom_kills": True})
 
     def test_setup_params_override_disables(self):
-        script = self._script_for(
-            manager_kwds={"check_cgroup_oom_kills": True}, setup_params={"check_cgroup_oom_kills": "false"}
-        )
-        assert REPORT not in script
+        for override in (False, "false"):
+            with self.subTest(override=override):
+                script = self._script_for(
+                    manager_kwds={"check_cgroup_oom_kills": True}, setup_params={"check_cgroup_oom_kills": override}
+                )
+                assert REPORT not in script
 
     def test_enabled_job_runs_cleanly(self):
         manager = Manager("_default_", self.app, check_cgroup_oom_kills=True)

@@ -3,11 +3,13 @@ import os
 import stat
 from typing import (
     Any,
+    Callable,
     Dict,
     IO,
     List,
     Optional,
     TYPE_CHECKING,
+    TypeVar,
     Union,
 )
 
@@ -27,6 +29,8 @@ if TYPE_CHECKING:
     from galaxy.tool_util.deps.dependencies import DependenciesDescription
 
 log = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 # TODO: Rename these to abstract out the fact they are files - pulsar
 # should be able to replace metadata backing with non-file stuff now that
@@ -216,7 +220,7 @@ class DirectoryBaseManager(BaseManager):
             dependencies_description,
             job_directory=self.job_directory(job_id).job_directory,
         )
-        cvmfsexec_config = self._cvmfsexec_config(setup_params)
+        cvmfsexec_config = self._per_job_option(setup_params, "cvmfsexec", self.cvmfsexec_config, cvmfsexec.parse)
         if cvmfsexec_config is not None:
             # Wrap the command to run under cvmfsexec (namespace mode); no-op for
             # mountrepo mode, where the container image path is remapped by a
@@ -241,21 +245,12 @@ class DirectoryBaseManager(BaseManager):
         return self._write_job_script(job_id, script)
 
     @staticmethod
-    def _per_job_option(setup_params: Optional[Dict[str, Any]], name: str) -> Any:
-        """A Galaxy destination's per-job override of a manager option, or None to use the manager default."""
-        return (setup_params or {}).get(name)
-
-    def _cvmfsexec_config(self, setup_params):
-        override = self._per_job_option(setup_params, "cvmfsexec")
-        if override is not None:
-            return cvmfsexec.parse(override)
-        return self.cvmfsexec_config
-
-    def _check_cgroup_oom_kills(self, setup_params: Optional[Dict[str, Any]]) -> bool:
-        override = self._per_job_option(setup_params, "check_cgroup_oom_kills")
-        if override is not None:
-            return asbool(override)
-        return self.check_cgroup_oom_kills
+    def _per_job_option(
+        setup_params: Optional[Dict[str, Any]], name: str, default: T, parse: Callable[[Any], T]
+    ) -> T:
+        """The parsed per-job (Galaxy destination) override of manager option ``name``, else ``default``."""
+        override = (setup_params or {}).get(name)
+        return default if override is None else parse(override)
 
     def _tmp_dir(self, job_id: str) -> Optional[str]:
         # Code stolen from Galaxy's job wrapper.
@@ -303,7 +298,9 @@ class DirectoryBaseManager(BaseManager):
             "job_id": job_id,
             "tmp_dir_creation_statement": self._tmp_dir(job_id),
             "prepare_dirs_statement": self._prepare_dirs(job_id),
-            "check_cgroup_oom_kills": self._check_cgroup_oom_kills(setup_params),
+            "check_cgroup_oom_kills": self._per_job_option(
+                setup_params, "check_cgroup_oom_kills", self.check_cgroup_oom_kills, asbool
+            ),
         }
         if command_line:
             job_template_env["command"] = command_line
