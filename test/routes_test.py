@@ -1,6 +1,11 @@
+import inspect
 from os.path import join
 
-from pulsar.web.routes import _output_path
+from pulsar.client.destination import PER_JOB_MANAGER_OPTIONS
+from pulsar.web.routes import (
+    _output_path,
+    submit,
+)
 from .test_utils import get_test_manager
 
 
@@ -22,3 +27,9 @@ def test_output_path_security():
         except Exception:
             raised_exception = True
         assert raised_exception
+
+
+def test_submit_accepts_every_per_job_manager_option():
+    """REST only forwards query params named in the route signature."""
+    submit_args = inspect.getfullargspec(submit.func).args
+    assert set(PER_JOB_MANAGER_OPTIONS) <= set(submit_args)
