@@ -99,6 +99,7 @@ setup(
     package_data={'pulsar': [
         'managers/util/job_script/DEFAULT_JOB_FILE_TEMPLATE.sh',
         'managers/util/job_script/CLUSTER_SLOTS_STATEMENT.sh',
+        'managers/util/job_script/CGROUP_OOM_KILLS_STATEMENT.sh',
         'scripts/cvmfs_data/*',
     ]},
     package_dir={'pulsar': 'pulsar'},

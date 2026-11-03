@@ -31,6 +31,11 @@ MEMORY_STATEMENT_DEFAULT_TEMPLATE = Template(
     resource_string(__name__, "MEMORY_STATEMENT.sh")
 )
 
+CGROUP_OOM_KILLS_STATEMENT_TEMPLATE = Template(
+    resource_string(__name__, "CGROUP_OOM_KILLS_STATEMENT.sh")
+)
+DEFAULT_CGROUP_MOUNT = "/sys/fs/cgroup"
+
 SLOTS_STATEMENT_SINGLE = """
 GALAXY_SLOTS="1"
 """
@@ -74,6 +79,8 @@ OPTIONAL_TEMPLATE_PARAMS: Dict[str, Any] = {
     "prepare_dirs_statement": PREPARE_DIRS,
     "cvmfsexec_setup": "",
     "exit_handler_setup": "",
+    "oom_kill_setup_statement": "",
+    "oom_kill_report_statement": "",
 }
 
 
@@ -170,6 +177,13 @@ def job_script(template=DEFAULT_JOB_FILE_TEMPLATE, **kwds):
         kwds["memory_statement"] = MEMORY_STATEMENT_DEFAULT_TEMPLATE.safe_substitute(
             metadata_directory=metadata_directory
         )
+    cgroup_mount = kwds.pop("cgroup_mount", DEFAULT_CGROUP_MOUNT)
+    proc_cgroup = kwds.pop("proc_cgroup", "/proc/$$/cgroup")
+    if kwds.pop("check_cgroup_oom_kills", False):
+        kwds["oom_kill_setup_statement"] = CGROUP_OOM_KILLS_STATEMENT_TEMPLATE.safe_substitute(
+            cgroup_mount=cgroup_mount, proc_cgroup=proc_cgroup
+        )
+        kwds["oom_kill_report_statement"] = "_galaxy_report_oom_kills"
 
     # Setup home directory var
     kwds["home_directory"] = kwds.get(

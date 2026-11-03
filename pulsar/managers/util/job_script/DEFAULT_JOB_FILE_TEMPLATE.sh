@@ -59,5 +59,7 @@ $cvmfsexec_setup
 cd $working_directory
 $memory_statement
 $instrument_pre_commands
+$oom_kill_setup_statement
 $command
+$oom_kill_report_statement
 $instrument_post_commands
