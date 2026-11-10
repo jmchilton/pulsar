@@ -16,6 +16,7 @@ from typing import (
     TYPE_CHECKING,
 )
 
+from galaxy.util import asbool
 from typing_extensions import Literal
 
 try:
@@ -220,7 +221,7 @@ class StatefulManagerProxy(ManagerProxy):
 
     def preprocess_and_launch(self, job_id: str, launch_config: Dict[str, Any]) -> None:
         self._persist_launch_config(job_id, launch_config)
-        if str(launch_config.get("setup_params", {}).get("require_collection_ack", False)).lower() == "true":
+        if asbool(launch_config.get("setup_params", {}).get("require_collection_ack", False)):
             self._proxied_manager.require_collection_ack(job_id)
         requires_preprocessing = launch_config.get("remote_staging") and launch_config[
             "remote_staging"

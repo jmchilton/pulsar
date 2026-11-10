@@ -6,6 +6,8 @@ import shlex
 from pathlib import Path
 from string import Template
 
+from galaxy.util import asbool
+
 from ..job import (
     BaseJobExec,
     job_states,
@@ -28,7 +30,7 @@ class EngageQueue(BaseJobExec):
             "--execution-mode", "local",
             *[str(value) for value in arguments],
         ]
-        if str(self.params.get("attach_only", False)).lower() == "true":
+        if asbool(self.params.get("attach_only", False)):
             command.insert(3, "--attach-only")
         return " ".join(shlex.quote(value) for value in command)
 
@@ -67,7 +69,7 @@ class EngageQueue(BaseJobExec):
                     value = Template(str(value)).safe_substitute(job_directory=str(directory), job_id=directory.name)
                     value = str(directory / value) if not Path(value).is_absolute() else value
                 arguments.extend(["--" + option.replace("_", "-"), value])
-        if str(self.params.get("require_hard_limits", False)).lower() == "true":
+        if asbool(self.params.get("require_hard_limits", False)):
             arguments.append("--require-hard-limits")
         arguments.extend(["--", "/bin/bash", str(Path(script_file).resolve())])
         return self._command(*arguments)
@@ -91,7 +93,7 @@ class EngageQueue(BaseJobExec):
 
     def delete(self, job_id):
         arguments = ["cancel", job_id]
-        if str(self.params.get("cancel_wait", False)).lower() == "true":
+        if asbool(self.params.get("cancel_wait", False)):
             arguments.extend(["--wait", "--timeout", self.params.get("cancel_timeout", 120)])
         return self._command(*arguments)
 

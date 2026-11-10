@@ -166,3 +166,10 @@ def test_non_uuid_assign_ids_rejected_for_attempt_keyed_plugin(tmp_path, assign_
     app.persistence_directory = str(tmp_path / "persistence")
     with pytest.raises(ValueError, match="assign_ids"):
         CliQueueManager("local", app, job_plugin="EngageQueue", job_state_dir=str(tmp_path / "state"), assign_ids=assign_ids)
+
+
+@pytest.mark.parametrize("value", ["true", "True", "yes", "1", True])
+def test_adapter_boolean_options_accept_galaxy_truthy_values(tmp_path, value):
+    plugin = EngageQueue(state_dir=str(tmp_path), attach_only=value, require_hard_limits=value)
+    command = plugin.submit(str(tmp_path / "command.sh"))
+    assert "--attach-only" in command and "--require-hard-limits" in command
