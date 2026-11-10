@@ -26,6 +26,10 @@ from pulsar.managers.stateful import (
     StatefulManagerProxy,
 )
 from pulsar.managers.util.cli.job.engagequeue import EngageQueue
+from pulsar.managers.util.external import (
+    SubmissionMissing,
+    SubmissionUncertain,
+)
 from .test_utils import (
     minimal_app_for_managers,
     wait_for,
@@ -409,11 +413,18 @@ def test_failed_id_persistence_recovers_in_same_controller(manager):
     assert Path(manager.job_directory(job_id).outputs_directory(), "count").read_text() == "one"
 
 
-def test_missing_submission_remains_nonterminal_without_replay(manager):
+def recovery_error(caplog):
+    (record,) = [record for record in caplog.records if record.getMessage().startswith("Failed to recover active job")]
+    assert record.exc_info
+    return record.exc_info[1]
+
+
+def test_missing_submission_remains_nonterminal_without_replay(manager, caplog):
     proxy = StatefulManagerProxy(manager, min_polling_interval=0)
     job_id = proxy.setup_job("not-accepted", "tool", "1")
     proxy.active_jobs.activate_job(job_id)
     proxy.recover_active_jobs()
+    assert isinstance(recovery_error(caplog), SubmissionMissing)
     assert proxy.get_status(job_id) == status.QUEUED
     assert not status.is_job_done(proxy.get_status(job_id))
     assert status_dict(proxy, job_id) == {"complete": "false", "status": status.QUEUED, "job_id": job_id}
@@ -433,13 +444,15 @@ def test_rejected_submission_fails_with_executor_error(manager, monkeypatch):
     assert job_id not in proxy.active_jobs.active_job_ids()
 
 
-def test_unknown_submission_transport_does_not_become_failed_or_complete(manager, monkeypatch):
+def test_unknown_submission_transport_does_not_become_failed_or_complete(manager, monkeypatch, caplog):
     proxy = StatefulManagerProxy(manager, min_polling_interval=0)
     job_id = proxy.setup_job("unknown-transport", "tool", "1")
     proxy.active_jobs.activate_job(job_id)
     shell, _ = manager.cli_interface.get_plugins(manager.shell_params, manager.job_params)
     monkeypatch.setattr(shell, "execute", lambda *args, **kwargs: Bunch(returncode=124, stdout="", stderr="transport timed out"))
     proxy.recover_active_jobs()
+    error = recovery_error(caplog)
+    assert isinstance(error, SubmissionUncertain) and not isinstance(error, SubmissionMissing)
     assert proxy.get_status(job_id) == status.QUEUED
     assert not status.is_job_done(proxy.get_status(job_id))
     assert status_dict(proxy, job_id) == {"complete": "false", "status": status.QUEUED, "job_id": job_id}
