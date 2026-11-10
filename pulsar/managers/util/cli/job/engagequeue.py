@@ -17,6 +17,7 @@ class EngageQueue(BaseJobExec):
 
     idempotent_submission = True
     confirms_cancellation = True
+    default_assign_ids = "uuid"
 
     def _command(self, *arguments):
         state_dir = self.params.get("state_dir")

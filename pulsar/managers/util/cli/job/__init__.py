@@ -7,6 +7,7 @@ from abc import (
     abstractmethod,
 )
 from enum import Enum
+from typing import Optional
 
 try:
     from galaxy.model import Job
@@ -23,6 +24,13 @@ except ImportError:
 
 
 class BaseJobExec(metaclass=ABCMeta):
+    # Submit is keyed per attempt; an uncertain submit is recovered by lookup, never replayed.
+    idempotent_submission = False
+    # Cancellation is terminal only once the scheduler confirms it.
+    confirms_cancellation = False
+    # ``assign_ids`` the manager defaults to for this plugin.
+    default_assign_ids: Optional[str] = None
+
     def __init__(self, **params):
         """
         Constructor for CLI job executor.
@@ -83,6 +91,18 @@ class BaseJobExec(metaclass=ABCMeta):
         """
         Parses the failure reason, assigning it against a
         """
+        return None
+
+    def recover_submission(self, script_file) -> Optional[str]:
+        """Return a lookup-only command printing the accepted ID for script_file, or None."""
+        return None
+
+    def submission_missing(self, result) -> bool:
+        """Whether a recover_submission result reports no accepted execution."""
+        return False
+
+    def parse_return_code(self, contents) -> Optional[int]:
+        """Parse a scheduler-reported return code from get_single_status output."""
         return None
 
 

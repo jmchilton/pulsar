@@ -277,7 +277,7 @@ class StatefulManagerProxy(ManagerProxy):
         recoverable_submission = False
         try:
             yield
-            recoverable_submission = getattr(self._proxied_manager, "recoverable_submission", False)
+            recoverable_submission = self._proxied_manager.recoverable_submission
             if self._proxied_manager._was_cancelled(job_id):
                 log.info("Exiting job launch, job is cancelled")
                 return
@@ -584,11 +584,11 @@ class StatefulManagerProxy(ManagerProxy):
             ):
                 try:
                     recover_method(job_id)
-                    if getattr(self._proxied_manager, "recoverable_submission", False):
+                    if self._proxied_manager.recoverable_submission:
                         self._proxied_manager.job_directory(job_id).store_metadata(JOB_FILE_PREPROCESSED, True, atomic=True)
                 except Exception:
                     log.exception("Failed to recover active job %s" % job_id)
-                    if getattr(self._proxied_manager, "recoverable_submission", False):
+                    if self._proxied_manager.recoverable_submission:
                         self._proxied_manager.job_directory(job_id).store_metadata(JOB_FILE_PREPROCESSED, True, atomic=True)
                     else:
                         self.__handle_recovery_problem(job_id)

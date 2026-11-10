@@ -56,18 +56,19 @@ class CliQueueManager(ExternalBaseManager):
     manager_type = "queued_cli"
 
     def __init__(self, name: str, app: "PulsarApp", **kwds):
-        if kwds.get("job_plugin") == "EngageQueue":
-            kwds.setdefault("assign_ids", "uuid")
-        super().__init__(name, app, **kwds)
         self.cli_interface = CliInterface()
         self.shell_params, self.job_params = split_params(kwds)
+        plugin_class = self.cli_interface.cli_job_interfaces.get(self.job_params.get("plugin"))
+        if plugin_class is not None and plugin_class.default_assign_ids:
+            kwds.setdefault("assign_ids", plugin_class.default_assign_ids)
+        super().__init__(name, app, **kwds)
 
     @property
-    def recoverable_submission(self):
+    def recoverable_submission(self) -> bool:
         if not self.job_params.get("plugin"):
             return False
         _, job_interface = self.__get_cli_plugins()
-        return bool(getattr(job_interface, "idempotent_submission", False))
+        return job_interface.idempotent_submission
 
     def launch(
         self,
@@ -80,7 +81,7 @@ class CliQueueManager(ExternalBaseManager):
     ) -> None:
         self._check_execution_with_tool_file(job_id, command_line)
         shell, job_interface = self.__get_cli_plugins()
-        if getattr(job_interface, "idempotent_submission", False):
+        if job_interface.idempotent_submission:
             # Resource requests may vary per job. Connection/identity settings
             # remain manager configuration, never untrusted submit overrides.
             for name in ("cpus", "memory_mb", "timeout", "output_limit"):
@@ -107,14 +108,14 @@ class CliQueueManager(ExternalBaseManager):
         submission_command = job_interface.submit(script_path)
         cmd_out = shell.execute(submission_command)
         if cmd_out.returncode != 0:
-            if getattr(job_interface, "idempotent_submission", False):
+            if job_interface.idempotent_submission:
                 self._recover_active_job(job_id)
                 return
             log.warning("Failed to submit job - command was:\n%s" % submission_command)
             raise Exception("Failed to submit job, error was:\n%s" % cmd_out.stderr)
         external_id = parse_external_id(cmd_out.stdout.strip())
         if not external_id:
-            if getattr(job_interface, "idempotent_submission", False):
+            if job_interface.idempotent_submission:
                 self._recover_active_job(job_id)
                 return
             message_template = (
@@ -126,7 +127,7 @@ class CliQueueManager(ExternalBaseManager):
         try:
             self._register_external_id(job_id, external_id)
         except Exception as exc:
-            if getattr(job_interface, "idempotent_submission", False):
+            if job_interface.idempotent_submission:
                 raise SubmissionUncertain("Accepted scheduler ID could not be persisted") from exc
             raise
 
@@ -144,7 +145,7 @@ class CliQueueManager(ExternalBaseManager):
         if not self.job_params.get("plugin"):
             return super().get_status(job_id)
         shell, job_interface = self.__get_cli_plugins()
-        if not getattr(job_interface, "confirms_cancellation", False):
+        if not job_interface.confirms_cancellation:
             return super().get_status(job_id)
         external_id = self._external_id(job_id)
         if not external_id:
@@ -193,11 +194,11 @@ class CliQueueManager(ExternalBaseManager):
             return
         except Exception:
             shell, job_interface = self.__get_cli_plugins()
-            recovery = getattr(job_interface, "recover_submission", None)
-            if recovery is None:
+            recovery_command = job_interface.recover_submission(self._job_file(job_id, "command.sh"))
+            if recovery_command is None:
                 raise
         # Lookup only: an uncertain accepted submission must never be replayed.
-        result = shell.execute(recovery(self._job_file(job_id, "command.sh")))
+        result = shell.execute(recovery_command)
         external_id = parse_external_id(result.stdout.strip()) if result.returncode == 0 else None
         if not external_id:
             if job_interface.submission_missing(result):

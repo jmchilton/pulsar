@@ -106,6 +106,19 @@ class ManagerInterface:
         End or cancel execution of the specified job.
         """
 
+    @abstractmethod
+    def require_collection_ack(self, job_id: str) -> None:
+        """Retain the job directory on clean until the client acknowledges collection."""
+
+    @abstractmethod
+    def acknowledge_collection(self, job_id: str) -> bool:
+        """Record that the client imported the job's outputs."""
+
+    @property
+    def recoverable_submission(self) -> bool:
+        """Whether an uncertain launch is recovered by lookup rather than failed."""
+        return False
+
     # TODO return type? Is this implemented anywhere, should be or? Found it only in ManagerProxy
     @abstractmethod
     def job_directory(self, job_id: str):
@@ -134,6 +147,10 @@ class ManagerProxy:
 
     def acknowledge_collection(self, *args, **kwargs) -> bool:
         return self._proxied_manager.acknowledge_collection(*args, **kwargs)
+
+    @property
+    def recoverable_submission(self) -> bool:
+        return self._proxied_manager.recoverable_submission
 
     def launch(self, *args, **kwargs) -> None:
         return self._proxied_manager.launch(*args, **kwargs)
