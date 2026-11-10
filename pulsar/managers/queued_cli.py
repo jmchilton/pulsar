@@ -147,7 +147,9 @@ class CliQueueManager(ExternalBaseManager):
         kill_command = job_interface.delete(external_id)
         result = shell.execute(kill_command)
         if result.returncode:
-            raise RuntimeError("Scheduler has not confirmed cancellation")
+            if job_interface.confirms_cancellation:
+                raise RuntimeError("Scheduler has not confirmed cancellation")
+            log.warning("Delete of external job %s exited %s: %s", external_id, result.returncode, result.stderr)
 
     def get_status(self, job_id: str) -> "StateLiteral":
         if not self.job_params.get("plugin"):

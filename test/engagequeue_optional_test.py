@@ -4,6 +4,7 @@ import subprocess
 import sys
 
 import pytest
+from galaxy.util.bunch import Bunch
 
 from pulsar.managers import status
 from pulsar.managers.queued_cli import CliQueueManager
@@ -48,6 +49,19 @@ def test_legacy_scheduler_cancel_status_does_not_redeliver(tmp_path, monkeypatch
 
         monkeypatch.setattr(manager, "_kill_external", unexpected_cancel)
         assert manager.get_status(job_id) == status.CANCELLED
+    finally:
+        manager.shutdown()
+
+
+def test_legacy_scheduler_failed_delete_does_not_raise(tmp_path, monkeypatch):
+    app = minimal_app_for_managers()
+    app.staging_directory = str(tmp_path / "staging")
+    app.persistence_directory = str(tmp_path / "persistence")
+    manager = CliQueueManager("legacy", app, job_plugin="Slurm")
+    try:
+        shell, _ = manager.cli_interface.get_plugins(manager.shell_params, manager.job_params)
+        monkeypatch.setattr(shell, "execute", lambda *args, **kwargs: Bunch(returncode=1, stdout="", stderr="already finished"))
+        manager._kill_external("123")
     finally:
         manager.shutdown()
 
