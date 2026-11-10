@@ -83,6 +83,10 @@ ID_ASSIGNER = {
 
 log = logging.getLogger(__name__)
 
+JOB_METADATA_COLLECTION_ACK_REQUIRED = "collection_ack_required"
+JOB_METADATA_COLLECTION_ACKNOWLEDGED = "collection_acknowledged"
+JOB_METADATA_COLLECTION_CLEAN_REQUESTED = "collection_clean_requested"
+
 # Same shape as Galaxy's own trimming of job streams (galaxy.util.shrink_and_unicodify).
 STREAM_SHRINK_KWDS: Dict[str, Any] = {"join_by": "\n..\n", "left_larger": True, "beginning_on_size_error": True}
 
@@ -133,15 +137,17 @@ class BaseManager(ManagerInterface, ABC):
             return
 
         job_directory = self._job_directory(job_id)
-        if job_directory.exists() and job_directory.has_metadata("collection_ack_required"):
-            with self._collection_lock():
-                if not job_directory.exists():
-                    return
-                if not job_directory.load_metadata("collection_acknowledged", False):
-                    job_directory.store_metadata("collection_clean_requested", True, atomic=True)
-                    return
-                self._delete_job_directory(job_directory)
-        elif job_directory.exists():
+        if not job_directory.exists():
+            return
+        if not job_directory.has_metadata(JOB_METADATA_COLLECTION_ACK_REQUIRED):
+            self._delete_job_directory(job_directory)
+            return
+        with self._collection_lock():
+            if not job_directory.exists():
+                return
+            if not job_directory.load_metadata(JOB_METADATA_COLLECTION_ACKNOWLEDGED, False):
+                job_directory.store_metadata(JOB_METADATA_COLLECTION_CLEAN_REQUESTED, True, atomic=True)
+                return
             self._delete_job_directory(job_directory)
 
     @staticmethod
@@ -162,7 +168,7 @@ class BaseManager(ManagerInterface, ABC):
         with self._collection_lock():
             if not directory.exists():
                 raise KeyError("Cannot require collection acknowledgment for an unknown job")
-            directory.store_metadata("collection_ack_required", True, atomic=True)
+            directory.store_metadata(JOB_METADATA_COLLECTION_ACK_REQUIRED, True, atomic=True)
 
     def acknowledge_collection(self, job_id: str) -> bool:
         """Record successful client import, separately from cleanup requests."""
@@ -172,8 +178,8 @@ class BaseManager(ManagerInterface, ABC):
         with self._collection_lock():
             if not directory.exists():
                 return True
-            directory.store_metadata("collection_acknowledged", True, atomic=True)
-            clean_requested = directory.load_metadata("collection_clean_requested", False)
+            directory.store_metadata(JOB_METADATA_COLLECTION_ACKNOWLEDGED, True, atomic=True)
+            clean_requested = directory.load_metadata(JOB_METADATA_COLLECTION_CLEAN_REQUESTED, False)
             if clean_requested and not self.debug:
                 self._delete_job_directory(directory)
         return True
