@@ -205,24 +205,23 @@ def test_cancellation_winning_at_submit_boundary_prevents_dispatch(manager, monk
     proxy = StatefulManagerProxy(manager, min_polling_interval=0)
     job_id = proxy.setup_job("cancel-at-dispatch", "tool", "1")
     directory = manager.job_directory(job_id)
-    was_cancelled = manager._was_cancelled
-    checks = []
+    begin_dispatch = proxy._begin_recoverable_dispatch
+    boundaries = []
     shell, _ = manager.cli_interface.get_plugins(manager.shell_params, manager.job_params)
 
-    def cancel_at_boundary(identifier):
-        checks.append(identifier)
-        if len(checks) == 2:
-            manager._record_cancel(identifier)
-        return was_cancelled(identifier)
+    def cancel_at_boundary(identifier, job_directory):
+        boundaries.append(identifier)
+        manager._record_cancel(identifier)
+        return begin_dispatch(identifier, job_directory)
 
     def unexpected_dispatch(*args, **kwargs):
         raise AssertionError("Cancellation won before submission; no CLI may run")
 
-    monkeypatch.setattr(manager, "_was_cancelled", cancel_at_boundary)
+    monkeypatch.setattr(proxy, "_begin_recoverable_dispatch", cancel_at_boundary)
     monkeypatch.setattr(shell, "execute", unexpected_dispatch)
     try:
         proxy.preprocess_and_launch(job_id, {"command_line": "never-executed", "remote_staging": {}})
-        assert len(checks) >= 2
+        assert boundaries == [job_id]
         assert proxy.get_status(job_id) == status.CANCELLED
         assert not directory.has_metadata(JOB_METADATA_SUBMISSION_STARTED)
         assert not directory.has_metadata(JOB_FILE_PREPROCESSING_FAILED)
