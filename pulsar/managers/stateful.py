@@ -292,17 +292,8 @@ class StatefulManagerProxy(ManagerProxy):
                 if kwd in launch_config:
                     launch_kwds[kwd] = launch_config[kwd]
 
-            if recoverable_submission:
-                # Persist discoverability before calling an executor that can
-                # accept work before its returned ID reaches this process.
-                with job_directory.lock("status"):
-                    # Either cancellation wins before dispatch, or clients must
-                    # wait for the scheduler to confirm all writers stopped.
-                    if self._proxied_manager._was_cancelled(job_id):
-                        log.info("Exiting job launch, job was cancelled before dispatch")
-                        return
-                    self.active_jobs.activate_job(job_id)
-                    job_directory.store_metadata(JOB_METADATA_SUBMISSION_STARTED, True, atomic=True)
+            if recoverable_submission and not self._begin_recoverable_dispatch(job_id, job_directory):
+                return
             self._proxied_manager.launch(
                 job_id, launch_config["command_line"], **launch_kwds
             )
@@ -328,6 +319,20 @@ class StatefulManagerProxy(ManagerProxy):
                 job_directory.write_file("stderr", str(e))
             self.__state_change_callback(status.FAILED, job_id)
             log.exception("Failed job preprocessing for job %s:", job_id)
+
+    def _begin_recoverable_dispatch(self, job_id: str, job_directory) -> bool:
+        """Activate and mark the job before dispatch; False if cancellation won first."""
+        # Persist discoverability before calling an executor that can
+        # accept work before its returned ID reaches this process.
+        with job_directory.lock("status"):
+            # Either cancellation wins before dispatch, or clients must
+            # wait for the scheduler to confirm all writers stopped.
+            if self._proxied_manager._was_cancelled(job_id):
+                log.info("Exiting job launch, job was cancelled before dispatch")
+                return False
+            self.active_jobs.activate_job(job_id)
+            job_directory.store_metadata(JOB_METADATA_SUBMISSION_STARTED, True, atomic=True)
+        return True
 
     def handle_failure_before_launch(self, job_id: str) -> None:
         self.__state_change_callback(status.FAILED, job_id)
@@ -583,16 +588,16 @@ class StatefulManagerProxy(ManagerProxy):
             for job_id in self.active_jobs.active_job_ids(
                 active_status=ACTIVE_STATUS_LAUNCHED
             ):
+                recoverable_submission = self._proxied_manager.recoverable_submission
                 try:
                     recover_method(job_id)
-                    if self._proxied_manager.recoverable_submission:
-                        self._proxied_manager.job_directory(job_id).store_metadata(JOB_FILE_PREPROCESSED, True, atomic=True)
                 except Exception:
                     log.exception("Failed to recover active job %s" % job_id)
-                    if self._proxied_manager.recoverable_submission:
-                        self._proxied_manager.job_directory(job_id).store_metadata(JOB_FILE_PREPROCESSED, True, atomic=True)
-                    else:
+                    if not recoverable_submission:
                         self.__handle_recovery_problem(job_id)
+                        continue
+                if recoverable_submission:
+                    self._proxied_manager.job_directory(job_id).store_metadata(JOB_FILE_PREPROCESSED, True, atomic=True)
 
         self.__recover_live_output()
 
