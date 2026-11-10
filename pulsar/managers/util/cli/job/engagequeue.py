@@ -76,6 +76,11 @@ class EngageQueue(BaseJobExec):
         return self._command("lookup", self.submission_key(script_file))
 
     @staticmethod
+    def submission_rejected(result):
+        # The submit CLI exited with its error status; it cannot accept later.
+        return result.returncode == 2
+
+    @staticmethod
     def submission_missing(result):
         return result.returncode == 3
 

@@ -446,6 +446,16 @@ def test_missing_submission_remains_nonterminal_without_replay(manager):
         assert executor.list() == []
 
 
+def test_rejected_submission_fails_with_executor_error(manager, monkeypatch):
+    monkeypatch.setitem(manager.job_params, "pool", "missing-pool")
+    proxy = StatefulManagerProxy(manager, min_polling_interval=0)
+    job_id = proxy.setup_job("rejected", "tool", "1")
+    proxy.preprocess_and_launch(job_id, {"command_line": "true", "remote_staging": {}})
+    assert proxy.get_status(job_id) == status.FAILED
+    assert "Unknown execution pool" in manager.job_directory(job_id).read_file("stderr").decode()
+    assert job_id not in proxy.active_jobs.active_job_ids()
+
+
 def test_unknown_submission_transport_does_not_become_failed_or_complete(manager, monkeypatch):
     from galaxy.util.bunch import Bunch
 

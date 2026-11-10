@@ -97,6 +97,10 @@ class BaseJobExec(metaclass=ABCMeta):
         """Return a lookup-only command printing the accepted ID for script_file, or None."""
         return None
 
+    def submission_rejected(self, result) -> bool:
+        """Whether a failed submit exited without accepting; checked only after lookup finds nothing."""
+        return False
+
     def submission_missing(self, result) -> bool:
         """Whether a recover_submission result reports no accepted execution."""
         return False

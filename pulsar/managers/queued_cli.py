@@ -25,6 +25,7 @@ from .util.cli import (
 from .util.cli.job import job_states
 from .util.external import (
     parse_external_id,
+    SubmissionMissing,
     SubmissionUncertain,
 )
 from .util.job_script import job_script
@@ -110,7 +111,13 @@ class CliQueueManager(ExternalBaseManager):
         cmd_out = shell.execute(submission_command)
         if cmd_out.returncode != 0:
             if job_interface.idempotent_submission:
-                self._recover_active_job(job_id)
+                log.warning("Submit exited %s for job %s:\n%s", cmd_out.returncode, job_id, cmd_out.stderr)
+                try:
+                    self._recover_active_job(job_id)
+                except SubmissionMissing:
+                    if job_interface.submission_rejected(cmd_out):
+                        raise Exception("Failed to submit job, error was:\n%s" % cmd_out.stderr)
+                    raise
                 return
             log.warning("Failed to submit job - command was:\n%s" % submission_command)
             raise Exception("Failed to submit job, error was:\n%s" % cmd_out.stderr)
@@ -205,7 +212,7 @@ class CliQueueManager(ExternalBaseManager):
             if job_interface.submission_missing(result):
                 # The original submit process can survive its controller and
                 # accept later. Absence now does not prove it is quiescent.
-                raise SubmissionUncertain("No accepted execution is visible yet; the original submission may still complete")
+                raise SubmissionMissing("No accepted execution is visible yet; the original submission may still complete")
             raise SubmissionUncertain("Unable to resolve the scheduler's accepted submission")
         try:
             self._register_external_id(job_id, external_id)
