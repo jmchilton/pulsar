@@ -316,8 +316,8 @@ class StatefulManagerProxy(ManagerProxy):
             # Must not launch, and stays indexed so recovery stages it after the restart.
             log.info("Pulsar is shutting down, leaving job %s to preprocess on restart", job_id)
         except SubmissionUncertain:
-            job_directory.store_metadata(JOB_FILE_PREPROCESSED, True, atomic=True)
-            job_directory.store_metadata("submission_uncertain", True, atomic=True)
+            with job_directory.lock("status"):
+                job_directory.store_metadata(JOB_FILE_PREPROCESSED, True, atomic=True)
             log.exception("Retaining uncertain scheduler submission for lookup-only recovery: %s", job_id)
         except Exception as e:
             if recoverable_submission:
