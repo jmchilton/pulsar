@@ -20,6 +20,7 @@ class EngageQueue(BaseJobExec):
     idempotent_submission = True
     confirms_cancellation = True
     required_assign_ids = "uuid"
+    submit_param_overrides = ("cpus", "memory_mb", "timeout", "output_limit")
 
     def _command(self, *arguments):
         state_dir = self.params.get("state_dir")

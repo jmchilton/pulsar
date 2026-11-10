@@ -7,7 +7,10 @@ from abc import (
     abstractmethod,
 )
 from enum import Enum
-from typing import Optional
+from typing import (
+    Optional,
+    Tuple,
+)
 
 try:
     from galaxy.model import Job
@@ -30,6 +33,9 @@ class BaseJobExec(metaclass=ABCMeta):
     confirms_cancellation = False
     # ``assign_ids`` the manager must use for this plugin (e.g. per-attempt submission keys).
     required_assign_ids: Optional[str] = None
+    # Per-job resource params a job's submit_params may override; connection and
+    # identity settings stay manager configuration.
+    submit_param_overrides: Tuple[str, ...] = ()
 
     def __init__(self, **params):
         """

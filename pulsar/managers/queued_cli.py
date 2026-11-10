@@ -83,12 +83,9 @@ class CliQueueManager(ExternalBaseManager):
     ) -> None:
         self._check_execution_with_tool_file(job_id, command_line)
         shell, job_interface = self.__get_cli_plugins()
-        if job_interface.idempotent_submission:
-            # Resource requests may vary per job. Connection/identity settings
-            # remain manager configuration, never untrusted submit overrides.
-            for name in ("cpus", "memory_mb", "timeout", "output_limit"):
-                if name in submit_params:
-                    job_interface.params[name] = submit_params[name]
+        for name in job_interface.submit_param_overrides:
+            if name in submit_params:
+                job_interface.params[name] = submit_params[name]
         stdout_path = self._job_stdout_path(job_id)
         stderr_path = self._job_stderr_path(job_id)
         job_name = self._job_name(job_id)
