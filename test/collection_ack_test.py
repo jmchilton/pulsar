@@ -75,7 +75,7 @@ def test_failed_or_cancelled_before_launch_has_api_cleanup_path(manager):
 def test_generic_guard_coordinates_independent_manager_instances(manager):
     job_id = manager.setup_job("racing", "tool", "1")
     manager.require_collection_ack(job_id)
-    second = QueueManager("other", manager.app if hasattr(manager, "app") else _app_for(manager))
+    second = QueueManager("other", _app_for(manager))
     try:
         with ThreadPoolExecutor(max_workers=8) as executor:
             futures = []
