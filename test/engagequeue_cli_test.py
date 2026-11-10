@@ -25,7 +25,6 @@ from pulsar.managers.stateful import (
     JOB_METADATA_SUBMISSION_STARTED,
     StatefulManagerProxy,
 )
-from pulsar.managers.util.cli.job import job_states
 from pulsar.managers.util.cli.job.engagequeue import EngageQueue
 from .test_utils import (
     minimal_app_for_managers,
@@ -284,30 +283,6 @@ def test_per_job_resource_overrides_are_allowlisted(manager):
         assert executor.status(manager._external_id(job_id)).returncode == 124
         accepted = executor.inspect(manager._external_id(job_id))["spec"]
         assert {name: accepted[name] for name in requests} == requests
-
-
-def test_adapter_quotes_paths_and_supports_relative_container_sidecars(tmp_path):
-    plugin = EngageQueue(
-        state_dir=str(tmp_path / "state with spaces"),
-        executable="/configured/bin/engagequeue",
-        attach_only=True,
-        container_spec="metadata/containers.json",
-    )
-    script = tmp_path / "job with spaces" / "command.sh"
-    arguments = shlex.split(plugin.submit(str(script)))
-    assert arguments[0] == "/configured/bin/engagequeue" and "--attach-only" in arguments
-    assert arguments[arguments.index("--execution-mode") + 1] == "local"
-    assert arguments.index("--attach-only") < arguments.index("submit")
-    assert arguments.index("--execution-mode") < arguments.index("submit")
-    assert arguments[arguments.index("--container-spec") + 1] == str(script.parent / "metadata/containers.json")
-
-
-@pytest.mark.parametrize(
-    "state,expected", [("STOPPING", job_states.RUNNING), ("LOST", job_states.RUNNING), ("FAILED", job_states.ERROR), ("SUCCEEDED", job_states.OK)]
-)
-def test_nonterminal_uncertainty_does_not_authorize_collection(state, expected):
-    plugin = EngageQueue(state_dir="/unused")
-    assert plugin.parse_single_status(json.dumps({"id": "job", "state": state}), "job") == expected
 
 
 def test_crash_after_acceptance_before_id_persistence_is_discoverable(tmp_path):

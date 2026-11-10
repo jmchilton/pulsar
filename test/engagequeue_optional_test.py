@@ -1,5 +1,7 @@
 """The optional CLI scheduler must load without the executor Python package."""
 
+import json
+import shlex
 import subprocess
 import sys
 
@@ -173,3 +175,27 @@ def test_adapter_boolean_options_accept_galaxy_truthy_values(tmp_path, value):
     plugin = EngageQueue(state_dir=str(tmp_path), attach_only=value, require_hard_limits=value)
     command = plugin.submit(str(tmp_path / "command.sh"))
     assert "--attach-only" in command and "--require-hard-limits" in command
+
+
+def test_adapter_quotes_paths_and_supports_relative_container_sidecars(tmp_path):
+    plugin = EngageQueue(
+        state_dir=str(tmp_path / "state with spaces"),
+        executable="/configured/bin/engagequeue",
+        attach_only=True,
+        container_spec="metadata/containers.json",
+    )
+    script = tmp_path / "job with spaces" / "command.sh"
+    arguments = shlex.split(plugin.submit(str(script)))
+    assert arguments[0] == "/configured/bin/engagequeue" and "--attach-only" in arguments
+    assert arguments[arguments.index("--execution-mode") + 1] == "local"
+    assert arguments.index("--attach-only") < arguments.index("submit")
+    assert arguments.index("--execution-mode") < arguments.index("submit")
+    assert arguments[arguments.index("--container-spec") + 1] == str(script.parent / "metadata/containers.json")
+
+
+@pytest.mark.parametrize(
+    "state,expected", [("STOPPING", job_states.RUNNING), ("LOST", job_states.RUNNING), ("FAILED", job_states.ERROR), ("SUCCEEDED", job_states.OK)]
+)
+def test_single_status_maps_executor_states(state, expected):
+    plugin = EngageQueue(state_dir="/unused")
+    assert plugin.parse_single_status(json.dumps({"id": "job", "state": state}), "job") == expected
