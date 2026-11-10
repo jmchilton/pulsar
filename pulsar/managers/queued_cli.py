@@ -59,8 +59,9 @@ class CliQueueManager(ExternalBaseManager):
         self.cli_interface = CliInterface()
         self.shell_params, self.job_params = split_params(kwds)
         plugin_class = self.cli_interface.cli_job_interfaces.get(self.job_params.get("plugin"))
-        if plugin_class is not None and plugin_class.default_assign_ids:
-            kwds.setdefault("assign_ids", plugin_class.default_assign_ids)
+        required_assign_ids = plugin_class.required_assign_ids if plugin_class is not None else None
+        if required_assign_ids and kwds.setdefault("assign_ids", required_assign_ids) != required_assign_ids:
+            raise ValueError(f"job_plugin {self.job_params['plugin']} requires assign_ids: {required_assign_ids}")
         super().__init__(name, app, **kwds)
 
     @property

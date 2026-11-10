@@ -143,3 +143,12 @@ def test_status_parsers_preserve_parent_keyword_contract():
     plugin = EngageQueue(state_dir="/unused")
     assert plugin.parse_single_status(status='{"id":"job","state":"RUNNING"}', job_id="job") == job_states.RUNNING
     assert plugin.parse_status(status='[{"id":"job","state":"RUNNING"}]', job_ids=["job"]) == {"job": job_states.RUNNING}
+
+
+@pytest.mark.parametrize("assign_ids", ["galaxy", "galaxy_prefixed"])
+def test_non_uuid_assign_ids_rejected_for_attempt_keyed_plugin(tmp_path, assign_ids):
+    app = minimal_app_for_managers()
+    app.staging_directory = str(tmp_path / "staging")
+    app.persistence_directory = str(tmp_path / "persistence")
+    with pytest.raises(ValueError, match="assign_ids"):
+        CliQueueManager("local", app, job_plugin="EngageQueue", job_state_dir=str(tmp_path / "state"), assign_ids=assign_ids)

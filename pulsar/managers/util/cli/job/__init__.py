@@ -28,8 +28,8 @@ class BaseJobExec(metaclass=ABCMeta):
     idempotent_submission = False
     # Cancellation is terminal only once the scheduler confirms it.
     confirms_cancellation = False
-    # ``assign_ids`` the manager defaults to for this plugin.
-    default_assign_ids: Optional[str] = None
+    # ``assign_ids`` the manager must use for this plugin (e.g. per-attempt submission keys).
+    required_assign_ids: Optional[str] = None
 
     def __init__(self, **params):
         """

@@ -17,7 +17,7 @@ class EngageQueue(BaseJobExec):
 
     idempotent_submission = True
     confirms_cancellation = True
-    default_assign_ids = "uuid"
+    required_assign_ids = "uuid"
 
     def _command(self, *arguments):
         state_dir = self.params.get("state_dir")
@@ -34,7 +34,7 @@ class EngageQueue(BaseJobExec):
 
     @staticmethod
     def submission_key(script_file):
-        # queued_cli selects UUID setup directories for idempotent executors.
+        # required_assign_ids makes setup directories UUIDs.
         # A new Pulsar setup is a new attempt; transport retries reuse its key.
         path = str(Path(script_file).resolve()).encode()
         return "pulsar:" + hashlib.sha256(path).hexdigest()
