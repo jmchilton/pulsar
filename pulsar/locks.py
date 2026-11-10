@@ -41,6 +41,7 @@ def interprocess_lock(path):
     descriptor = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
     try:
         if os.name == "nt":
+            # Platform-only modules; neither exists on the other OS.
             import msvcrt
 
             if os.fstat(descriptor).st_size == 0:

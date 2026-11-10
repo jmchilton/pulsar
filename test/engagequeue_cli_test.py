@@ -1,7 +1,9 @@
 """Execute real prepared Pulsar scripts through the thin scheduler adapter."""
 
 import json
+import os
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -11,6 +13,7 @@ from threading import (
 )
 
 import pytest
+from galaxy.util.bunch import Bunch
 
 from pulsar.manager_endpoint_util import status_dict
 from pulsar.managers import status
@@ -457,8 +460,6 @@ def test_rejected_submission_fails_with_executor_error(manager, monkeypatch):
 
 
 def test_unknown_submission_transport_does_not_become_failed_or_complete(manager, monkeypatch):
-    from galaxy.util.bunch import Bunch
-
     proxy = StatefulManagerProxy(manager, min_polling_interval=0)
     job_id = proxy.setup_job("unknown-transport", "tool", "1")
     proxy.active_jobs.activate_job(job_id)
@@ -472,8 +473,6 @@ def test_unknown_submission_transport_does_not_become_failed_or_complete(manager
 
 
 def test_known_execution_transport_failure_remains_nonterminal(manager, monkeypatch):
-    from galaxy.util.bunch import Bunch
-
     job_id = manager.setup_job("unknown-status", "tool", "1")
     manager.launch(job_id, "sleep 30")
     shell, _ = manager.cli_interface.get_plugins(manager.shell_params, manager.job_params)
@@ -610,9 +609,6 @@ proxy.preprocess_and_launch(job,{'command_line':command,'remote_staging':{}})
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux Docker ownership integration is tested separately from native macOS")
 def test_real_docker_sidecar_stops_all_owned_containers_even_after_script_exit(manager):
-    import os
-    import shutil
-
     if shutil.which("docker") is None:
         pytest.skip("Docker is unavailable")
     available = subprocess.run(["docker", "image", "inspect", DOCKER_TEST_IMAGE], capture_output=True)
