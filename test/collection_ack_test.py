@@ -12,11 +12,13 @@ from pulsar.client.client import (
     JobClient,
 )
 from pulsar.client.server_interface import LocalPulsarInterface
+from pulsar.managers import status
 from pulsar.managers.queued import QueueManager
 from pulsar.managers.stateful import StatefulManagerProxy
 from .test_utils import (
     minimal_app_for_managers,
     test_pulsar_app as pulsar_app,
+    wait_for,
 )
 
 
@@ -129,6 +131,21 @@ def test_local_client_setup_opt_in_and_ack_route(manager):
     assert manager.job_directory(client.job_id).exists()
     assert client.acknowledge_collection() == {"acknowledged": True}
     assert not manager.job_directory(client.job_id).exists()
+
+
+def test_local_setup_client_opt_in_reaches_server_through_launch(manager):
+    proxy = StatefulManagerProxy(manager)
+    interface = LocalPulsarInterface({}, job_manager=proxy)
+    client = JobClient({"jobs_directory": manager.staging_directory}, "local-setup", interface)
+    assert client.setup_handler.local
+    config = client.setup(require_collection_ack=True)
+    client.launch("true", job_config=config)
+    wait_for(lambda: proxy.get_status(client.job_id), "complete job", until=lambda state: state == status.COMPLETE, timeout=10)
+    directory = manager.job_directory(client.job_id)
+    client.clean()
+    assert directory.exists()
+    assert client.acknowledge_collection() == {"acknowledged": True}
+    assert not directory.exists()
 
 
 @pytest.mark.parametrize("confirmation", [None, False, "false", "true", 1])
