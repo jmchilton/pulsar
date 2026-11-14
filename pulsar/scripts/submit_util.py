@@ -11,7 +11,9 @@ from pulsar.main import (
 )
 from pulsar.manager_endpoint_util import submit_job
 from pulsar.managers.status import (
+    FAILED,
     is_job_done,
+    LOST,
     PREPROCESSING,
 )
 
@@ -19,6 +21,10 @@ log = logging.getLogger(__name__)
 
 DEFAULT_POLL_TIME = 2
 DEFAULT_LAUNCH_POLL_TIME = 0.5
+
+EXIT_SUCCESS = 0
+EXIT_FAILURE = 1
+FAILED_STATUSES = (FAILED, LOST)
 
 
 def add_common_submit_args(arg_parser):
@@ -28,29 +34,53 @@ def add_common_submit_args(arg_parser):
 
 
 def run_server_for_job(args):
+    """Submit a job and return the process exit code.
+
+    Without ``--wait`` the exit code is non-zero when the job could not be
+    submitted or its inputs staged. The failure has been published as a
+    ``failed`` status by then, unless the job config could not be read. The
+    non-zero exit lets a sequential coexecution environment such as TES stop
+    the task, instead of leaving the tool container waiting for a command line
+    that is never written.
+
+    With ``--wait`` it is always zero, as before. Kubernetes runs this in a
+    Job, which replaces a failed pod (``backoffLimit`` defaults to 6) and so
+    would run the job again after its final status was published.
+    """
     wait = args.wait
     config_builder = PulsarManagerConfigBuilder(args)
     manager, app = manager_from_args(config_builder)
+    job_status = None
     try:
         job_config = _load_job_config(args)
         submit_job(manager, job_config)
         if wait:
             log.info("Co-execution job setup, now waiting for job completion and postprocessing.")
-            wait_for_job(manager, job_config)
+            job_status = wait_for_job(manager, job_config)
             log.info("Leaving finish_execution and shutting down app")
         else:
-            wait_for_launch(manager, job_config)
+            job_status = wait_for_launch(manager, job_config)
     except BaseException:
         if wait:
             message = "Failure submitting or waiting on job."
         else:
             message = "Failure submitting job."
         log.exception(message)
+        job_status = FAILED
     finally:
         app.shutdown()
+    if wait:
+        return EXIT_SUCCESS
+    return _exit_code_for_status(job_status)
 
 
 def run_server_for_job_finish(args):
+    """Finish a job and return the process exit code.
+
+    Non-zero when finishing failed or the job ended failed, for instance
+    because its outputs could not be staged back. Only sequential
+    coexecution runs ``pulsar-finish``.
+    """
     config_builder = PulsarManagerConfigBuilder(args)
     manager, app = manager_from_args(config_builder)
     try:
@@ -61,20 +91,30 @@ def run_server_for_job_finish(args):
         log.info("Informing Pulsar app the target job has completed")
         manager._proxied_manager.finish_execution(job_id)
         log.info("Waiting for job to complete")
-        wait_for_job(manager, job_config)
+        job_status = wait_for_job(manager, job_config)
         log.info("Leaving finish_execution and shutting down app")
     except BaseException:
         log.exception("Failure finishing job.")
+        job_status = FAILED
     finally:
         app.shutdown()
+    return _exit_code_for_status(job_status)
+
+
+def _exit_code_for_status(job_status):
+    if job_status in FAILED_STATUSES:
+        log.error("Job ended with status [%s].", job_status)
+        return EXIT_FAILURE
+    return EXIT_SUCCESS
 
 
 def wait_for_job(manager, job_config, poll_time=DEFAULT_POLL_TIME):
+    """Poll until the job is done and return its final status."""
     job_id = job_config.get('job_id')
     while True:
         status = manager.get_status(job_id)
         if is_job_done(status):
-            break
+            return status
         time.sleep(poll_time)
 
 
@@ -85,9 +125,14 @@ def wait_for_launch(manager, job_config, poll_time=DEFAULT_LAUNCH_POLL_TIME):
     time it sees the launched job running. Without a waiting submit, the app
     shuts down while inputs are still staging, so nothing polls the job and
     ``running`` is never published.
+
+    Returns the first status after preprocessing.
     """
     job_id = job_config.get('job_id')
-    while manager.get_status(job_id) == PREPROCESSING:
+    while True:
+        status = manager.get_status(job_id)
+        if status != PREPROCESSING:
+            return status
         time.sleep(poll_time)
 
 
