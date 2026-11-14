@@ -11,11 +11,14 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_ROOT_USER_ACTION=ignore
 
-# Pulsar's wheel is pure Python and its dependencies ship wheels, so no
-# compiler is needed. pycurl (opt-in via PULSAR_CURL_TRANSPORT=1) and drmaa are
-# left out: coexecution stages over HTTP with requests and never talks to a DRM.
+# Pulsar's wheel is pure Python and its dependencies ship wheels (pycurl's
+# manylinux wheel bundles libcurl), so no compiler is needed. Remote transfer
+# staging uses pycurl whenever it imports, whatever PULSAR_CURL_TRANSPORT says.
+# Without it staging falls back to requests, which reads each uploaded output
+# fully into memory and can't resume downloads. drmaa is left out: coexecution
+# never talks to a DRM.
 COPY pulsar_app-*.whl /tmp/
-RUN pip install "$(ls /tmp/pulsar_app-*.whl)[amqp,galaxy_extended_metadata]" \
+RUN pip install "$(ls /tmp/pulsar_app-*.whl)[amqp,galaxy_extended_metadata]" pycurl \
     && rm /tmp/pulsar_app-*.whl
 
 # Containerless jobs resolve tool requirements with Conda under
