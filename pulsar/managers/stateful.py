@@ -33,6 +33,7 @@ from pulsar.managers import (
     ManagerProxy,
     status,
 )
+from pulsar.managers.base.directory import TOOL_FILE_STANDARD_ERROR
 from pulsar.managers.live_output import (
     DEFAULT_CHUNK_SIZE as DEFAULT_STDOUT_CHUNK_SIZE,
     DEFAULT_INTERVAL as DEFAULT_STDOUT_INTERVAL,
@@ -298,7 +299,7 @@ class StatefulManagerProxy(ManagerProxy):
             with job_directory.lock("status"):
                 job_directory.store_metadata(JOB_FILE_PREPROCESSING_FAILED, True)
                 job_directory.store_metadata("return_code", 1)
-                job_directory.write_file("stderr", str(e))
+                _record_preprocessing_failure(job_directory, e)
             self.__state_change_callback(status.FAILED, job_id)
             log.exception("Failed job preprocessing for job %s:", job_id)
 
@@ -614,6 +615,15 @@ class StatefulManagerProxy(ManagerProxy):
         # Make sure we tell the client we have lost this job.
         self.active_jobs.deactivate_job(job_id)
         self.__state_change_callback(status.LOST, job_id)
+
+
+def _record_preprocessing_failure(job_directory: "JobDirectory", exception: Exception) -> None:
+    """Keep the error as the tool's stderr, which the failed status reports to the client."""
+    message = "Pulsar failed to stage inputs or launch the job: %s\n" % exception
+    try:
+        job_directory.write_file(TOOL_FILE_STANDARD_ERROR, message)
+    except OSError:
+        log.exception("Failed to record preprocessing failure for job directory %s", job_directory.job_directory)
 
 
 class ActiveJobs:
