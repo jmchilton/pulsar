@@ -4,7 +4,10 @@ import json
 import logging
 import time
 
-from pulsar.client.util import from_base64_json
+from pulsar.client.util import (
+    from_base64_json,
+    from_base64_zlib_json,
+)
 from pulsar.main import (
     load_pulsar_app,
     PulsarManagerConfigBuilder,
@@ -20,6 +23,7 @@ DEFAULT_POLL_TIME = 2
 def add_common_submit_args(arg_parser):
     arg_parser.add_argument("--file", default=None)
     arg_parser.add_argument("--base64", default=None)
+    arg_parser.add_argument("--base64_zlib", default=None)
     PulsarManagerConfigBuilder.populate_options(arg_parser)
 
 
@@ -73,6 +77,8 @@ def wait_for_job(manager, job_config, poll_time=DEFAULT_POLL_TIME):
 
 
 def _load_job_config(args):
+    if args.base64_zlib:
+        return from_base64_zlib_json(args.base64_zlib)
     if args.base64:
         base64_job_config = args.base64
         job_config = from_base64_json(base64_job_config)
